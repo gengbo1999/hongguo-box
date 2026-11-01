@@ -1,0 +1,125 @@
+# 短剧盒子服务端 —— k3s(dev 命名空间) 部署清单
+#
+#   kubectl apply -f server/k8s.yaml
+#
+# 镜像由 .github/workflows/build-image.yml 推送到 ACR, 再用 kubectl set image 更新。
+# TLS 走 cert-manager 的 letsencrypt-prod 自动签发; 如果想复用现有的
+# *.gengbo.top 通配证书, 把 cert-manager 注解删掉、secretName 改成 gengbo-wildcard-tls。
+
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: hongguo-data
+  namespace: dev
+spec:
+  accessModes: ["ReadWriteOnce"]
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 2Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hongguo
+  namespace: dev
+  labels: {app: hongguo}
+spec:
+  replicas: 1
+  # 索引库是单写者, 不要滚动多副本
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app: hongguo}
+  template:
+    metadata:
+      labels: {app: hongguo}
+    spec:
+      # 镜像在个人版 ACR, 如果节点没有登录态就打开下面这行并建好 secret
+      # imagePullSecrets: [{name: acr-cred}]
+      initContainers:
+        # 把镜像里烘焙的种子索引搬进 PVC(容器挂载会遮住镜像内 /app/data)
+        - name: seed
+          image: crpi-p67sy5t6k9nsmste.cn-hangzhou.personal.cr.aliyuncs.com/gengbo/hongguo:latest
+          command:
+            - sh
+            - -c
+            - cp -n /app/data/index.bin.z /seed/index.bin.z 2>/dev/null || true
+          volumeMounts:
+            - {name: data, mountPath: /seed}
+      containers:
+        - name: hongguo
+          image: crpi-p67sy5t6k9nsmste.cn-hangzhou.personal.cr.aliyuncs.com/gengbo/hongguo:latest
+          imagePullPolicy: Always
+          ports:
+            - {name: http, containerPort: 8787}
+          env:
+            - {name: PORT, value: "8787"}
+            - {name: HG_DB, value: /app/data/hongguo.db}
+            - {name: HG_SEED_INDEX, value: /seed/index.bin.z}
+            # 每 6 小时增量抓一次站点, 补新剧
+            - {name: HG_REFRESH_SEC, value: "21600"}
+            # 上游签名进程由 entrypoint 拉起并自动发现端口
+            - {name: SIGNER_PORT, value: "0"}
+          volumeMounts:
+            - {name: data, mountPath: /app/data}
+          # 首次启动要把 58 万条种子索引导入 SQLite, 给足启动时间
+          startupProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 10
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet: {path: /healthz, port: http}
+            initialDelaySeconds: 30
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 5
+          resources:
+            requests: {cpu: 200m, memory: 640Mi}
+            limits: {cpu: "1", memory: 1536Mi}
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: hongguo-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: hongguo
+  namespace: dev
+  labels: {app: hongguo}
+spec:
+  type: ClusterIP
+  selector: {app: hongguo}
+  ports:
+    - {name: http, port: 80, targetPort: http}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: hongguo
+  namespace: dev
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/proxy-body-size: "32m"
+    # 视频直传要更长的读超时
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts: [hongguo.gengbo.top]
+      secretName: hongguo.gengbo.top-tls
+  rules:
+    - host: hongguo.gengbo.top
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: hongguo
+                port: {number: 80}

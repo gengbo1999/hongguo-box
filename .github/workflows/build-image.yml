@@ -1,0 +1,87 @@
+name: server-image
+
+# 只有打 v* 标签才构建服务端镜像, 避免和 build-ipa.yml 的 push 触发重复跑。
+# 首次上线前需要在 k3s-master 上先 apply 一次清单:
+#   kubectl apply -f server/k8s.yaml
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "手动构建时用的镜像标签"
+        required: false
+        default: "manual"
+
+env:
+  IMAGE: crpi-p67sy5t6k9nsmste.cn-hangzhou.personal.cr.aliyuncs.com/gengbo/hongguo
+  APP: hongguo
+  NAMESPACE: dev
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 解析镜像标签
+        id: meta
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "tag=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: 检查签名材料
+        run: |
+          if [ -f server/sign/unidbg-sign.jar ]; then
+            echo "已打包 unidbg 签名 jar"
+          else
+            echo "::warning::没有 server/sign/unidbg-sign.jar, 镜像里 /resolve 将无签名直连"
+          fi
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: crpi-p67sy5t6k9nsmste.cn-hangzhou.personal.cr.aliyuncs.com
+          username: ${{ secrets.ALIYUN_USERNAME }}
+          password: ${{ secrets.ALIYUN_PASSWORD }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: server/Dockerfile
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:${{ steps.meta.outputs.tag }}
+            ${{ env.IMAGE }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: 在 k3s-master 上滚动更新
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.K3S_HOST }}
+          port: ${{ secrets.K3S_PORT }}
+          username: ${{ secrets.K3S_USER }}
+          key: ${{ secrets.K3S_SSH_KEY }}
+          script: |
+            set -e
+            IMAGE="${{ env.IMAGE }}:${{ needs.build.outputs.tag || github.ref_name }}"
+            if ! kubectl -n ${{ env.NAMESPACE }} get deployment ${{ env.APP }} >/dev/null 2>&1; then
+              echo "deployment/${{ env.APP }} 不存在, 请先执行: kubectl apply -f server/k8s.yaml"
+              exit 1
+            fi
+            kubectl -n ${{ env.NAMESPACE }} set image deployment/${{ env.APP }} \
+              ${{ env.APP }}=$IMAGE --record=false
+            kubectl -n ${{ env.NAMESPACE }} rollout status deployment/${{ env.APP }} --timeout=300s
+            kubectl -n ${{ env.NAMESPACE }} get ingress ${{ env.APP }} \
+              -o jsonpath='{.spec.rules[0].host}{"\n"}'

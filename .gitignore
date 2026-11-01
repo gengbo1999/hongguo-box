@@ -3,3 +3,12 @@ build-dd/
 hg2
 shot-*.png
 .DS_Store
+
+# 服务端本地调试产物
+server/hg/*.db
+server/hg/*.db-wal
+server/hg/*.db-shm
+__pycache__/
+server/seed/
+server/sign/
+server/capture/
