@@ -1,0 +1,88 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: shortdrama-resolver-src
+  namespace: default
+data:
+  # 不要手改这里：用下面的命令把真实代码注入
+  # kubectl create configmap shortdrama-resolver-src \
+  #   --from-file=resolver.py=server/resolver/resolver.py \
+  #   --dry-run=client -o yaml | kubectl apply -f -
+  resolver.py: |
+    # placeholder - 用上面的命令注入真实内容
+    print("inject resolver.py via configmap")
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: shortdrama-resolver
+  namespace: default
+  labels:
+    app: shortdrama-resolver
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: shortdrama-resolver
+  template:
+    metadata:
+      labels:
+        app: shortdrama-resolver
+    spec:
+      containers:
+        - name: resolver
+          image: python:3.12-alpine
+          imagePullPolicy: IfNotPresent
+          command: ["python3", "/app/resolver.py"]
+          ports:
+            - containerPort: 8787
+              name: http
+          env:
+            - name: PORT
+              value: "8787"
+            # 签名插件命令；未打通前留空，网关退化为「不加签直传」
+            - name: SIGNER_CMD
+              value: ""
+          volumeMounts:
+            - name: src
+              mountPath: /app
+              readOnly: true
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 2
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          resources:
+            requests:
+              cpu: 20m
+              memory: 48Mi
+            limits:
+              cpu: 300m
+              memory: 192Mi
+      volumes:
+        - name: src
+          configMap:
+            name: shortdrama-resolver-src
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: shortdrama-resolver
+  namespace: default
+  labels:
+    app: shortdrama-resolver
+spec:
+  type: ClusterIP
+  selector:
+    app: shortdrama-resolver
+  ports:
+    - name: http
+      port: 8787
+      targetPort: http

@@ -301,8 +301,52 @@ enum PlayerAPI {
         return .success(parseTracks(vm))
     }
 
-    /// 取流（单入口）：任一套 profile 通就返回；全不通抛错。
+    /// 走服务端签名网关取流。
+    ///
+    /// 这是拿到 1080p 的**唯一现实路径**：签名头只能在 Android 侧生成，
+    /// 放到服务端之后，签名方案一打通就全量生效，不用重新侧载 App。
+    /// 网关没配 / 连不上 / 签名还没通，都会返回空数组，调用方自然回退本地直连。
+    static func remoteTracks(_ vid: String) async -> [VideoTrack] {
+        guard RemoteResolver.isEnabled else { return [] }
+
+        var out: [VideoTrack] = []
+        for p in profiles.prefix(2) {
+            var q = Dictionary(p.query, uniquingKeysWith: { a, _ in a })
+            let g = guestDevice
+            q["device_id"] = g.id
+            q["iid"] = g.iid
+            let spec = RemoteResolver.Spec(
+                host: p.host,
+                path: multiPath,
+                query: q,
+                body: multiBody(vid),
+                ua: ua,
+                headers: Dictionary(p.headers, uniquingKeysWith: { a, _ in a })
+            )
+            guard let r = await RemoteResolver.resolve(spec), r.ok else { continue }
+            let tracks = RemoteResolver.parseTracks(r)
+            guard !tracks.isEmpty else { continue }
+            out = tracks.map { t in
+                var v = VideoTrack()
+                v.definition = t.definition
+                v.width = t.width
+                v.height = t.height
+                v.size = Int(t.size)
+                v.codec = t.codec
+                v.url = t.url
+                v.spadeA = t.spadeA
+                v.note = t.spadeA.isEmpty ? "" : "网关/加密"
+                return v
+            }
+            break
+        }
+        return out
+    }
+
+    /// 取流（单入口）：先问服务端网关，再走本地直连；全不通抛错。
     static func videoModel(_ vid: String) async throws -> [VideoTrack] {
+        let remote = await remoteTracks(vid)
+        if !remote.isEmpty { return remote }
         for p in profiles {
             if case .success(let t) = await multiAttempt(p, vid: vid), !t.isEmpty { return t }
         }
