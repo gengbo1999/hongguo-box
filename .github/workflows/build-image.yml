@@ -51,16 +51,39 @@ jobs:
           username: ${{ secrets.ALIYUN_USERNAME }}
           password: ${{ secrets.ALIYUN_PASSWORD }}
 
-      - uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: server/Dockerfile
-          push: true
-          tags: |
-            ${{ env.IMAGE }}:${{ steps.meta.outputs.tag }}
-            ${{ env.IMAGE }}:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+      - name: 构建并推送镜像
+        id: build
+        run: |
+          set +e
+          TAG="${{ steps.meta.outputs.tag }}"
+          docker build -f server/Dockerfile \
+            -t "${{ env.IMAGE }}:$TAG" -t "${{ env.IMAGE }}:latest" . \
+            > /tmp/docker-build.log 2>&1
+          code=$?
+          echo "===== 构建 exit=$code ====="
+          tail -60 /tmp/docker-build.log
+          if [ $code -ne 0 ]; then
+            echo "--- 最后 400 行 ---" >> /tmp/docker-build.log
+            cp /tmp/docker-build.log build-error.log
+            exit $code
+          fi
+          docker push "${{ env.IMAGE }}:$TAG"
+          docker push "${{ env.IMAGE }}:latest"
+
+      # Actions 的日志 API 403，失败原因推到 ci-log 分支留档
+      - name: 留档构建日志
+        if: always()
+        run: |
+          {
+            echo "=== server-image run ${GITHUB_RUN_NUMBER} tag=${GITHUB_REF_NAME} ==="
+            tail -400 /tmp/docker-build.log 2>/dev/null || echo "没有构建日志"
+          } > ShortDramaBox/build-error.log
+          git config user.name "ci"
+          git config user.email "ci@local"
+          git checkout -B ci-log
+          git add -f ShortDramaBox/build-error.log
+          git commit -m "ci: 镜像构建日志 run ${GITHUB_RUN_NUMBER} [skip ci]" || true
+          git push -f origin ci-log || true
 
   deploy:
     needs: build
