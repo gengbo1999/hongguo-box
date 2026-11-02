@@ -113,9 +113,6 @@ cp -r <App>/Contents/Resources/backend/capture server/capture    # fq_oversea/{s
 
 ## 还没做
 
-- 客户端瘦身：删 `ShortDramaBox/Sources/Resources/index.bin.z`（21MB，占 IPA 89%）
-  和 `Sources/Core/LocalIndex.swift`，改调本服务的 `/api/search`、`/api/detail`。
-  这一步要跟着 Xcode 构建验证，没在本机跑过，所以没动。
 - 服务端解密 1080p：`spade_a` → `unwrap_v1` → AES-128-CTR → 去 CENC 的链路已经逆清，
   但还没搬进 `app.py`。媒体字节已经不经过服务端（`/api/media` 透传已删），
   客户端拿 `/api/tracks` 给的地址自己拉流、自己解密。
