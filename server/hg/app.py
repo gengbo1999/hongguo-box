@@ -41,7 +41,8 @@ CATEGORIES = [("real-drama", "真人剧"), ("comic-drama", "漫剧"),
 UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 "
       "(KHTML, like Gecko) Version/17.0 Safari/605.1.15")
 
-_db_lock = threading.Lock()
+# RLock: /healthz 会在持锁区间里再调 conn(), 可重入才不会自锁
+_db_lock = threading.RLock()
 _conn = None
 
 
@@ -431,13 +432,17 @@ class Handler(BaseHTTPRequestHandler):
         p = u.path.rstrip("/") or "/"
 
         if p in ("/healthz", "/"):
-            return self._send(200, {
-                "ok": True, "service": "hongguo-box", "version": "1.0.0",
-                "series": count_series(), "tags": catalog.tag_count(conn()),
-                "seeded": db_meta("seeded"), "refreshed": db_meta("refreshed"),
-                "catalog_index_at": db_meta("tag_index_at"),
-                "signer": upstream.signer_available(),
-            })
+            # 多个探针/客户端会同时打这里, 全局只有一个 _conn, 不加锁会撞出
+            # sqlite3.InterfaceError: bad parameter or other API misuse
+            with _db_lock:
+                body = {
+                    "ok": True, "service": "hongguo-box", "version": "1.0.0",
+                    "series": count_series(), "tags": catalog.tag_count(conn()),
+                    "seeded": db_meta("seeded"), "refreshed": db_meta("refreshed"),
+                    "catalog_index_at": db_meta("tag_index_at"),
+                }
+            body["signer"] = upstream.signer_available()
+            return self._send(200, body)
 
         if p == "/api/nav":
             return self._send(200, {"ok": True, "categories": [
@@ -606,7 +611,13 @@ def main():
     if REFRESH_SEC > 0:
         threading.Thread(target=refresh_loop, daemon=True).start()
         print(f"[crawl] 每 {REFRESH_SEC}s 刷新一次", flush=True)
-    srv = ThreadingHTTPServer(("0.0.0.0", port), Handler)
+    class Server(ThreadingHTTPServer):
+        # 默认 listen backlog 只有 5。k8s 探针 + 客户端并发打进来时会直接丢连接
+        # (实测 64 并发丢 15 条, 表现为 connection reset), 抬高一点。
+        request_queue_size = 128
+        daemon_threads = True
+
+    srv = Server(("0.0.0.0", port), Handler)
     print(f"[http] 监听 :{port}, 库存 {count_series()} 条", flush=True)
     srv.serve_forever()
 
