@@ -43,6 +43,15 @@ jobs:
             echo "::warning::没有 server/sign/unidbg-sign.jar, 镜像里 /resolve 将无签名直连"
           fi
 
+      # 种子索引被 .gitignore 排除（22MB），checkout 里没有；从历史提交里取回来。
+      # 不取的话镜像里就没有 index.bin.z，首次启动库存 0 条，客户端开屏全空。
+      - name: 取种子索引
+        run: |
+          mkdir -p server/seed
+          git show 4e4e266^:ShortDramaBox/Sources/Resources/index.bin.z > server/seed/index.bin.z
+          ls -l server/seed/index.bin.z
+          test "$(wc -c < server/seed/index.bin.z)" -gt 20000000
+
       - uses: docker/setup-buildx-action@v3
 
       - uses: docker/login-action@v3
