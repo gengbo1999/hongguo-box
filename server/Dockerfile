@@ -16,7 +16,9 @@
 FROM python:3.12-alpine
 
 # iproute2 提供 ss, 用来发现 unidbg 的临时监听端口
-RUN apk add --no-cache openjdk17-jre-headless iproute2 tzdata ca-certificates \
+# 换阿里云源: dl-cdn.alpinelinux.org 在 GitHub runner 上多次 TLS 失败, 一失败整个构建就挂
+RUN sed -i 's|https://dl-cdn.alpinelinux.org/alpine|https://mirrors.aliyun.com/alpine|g' /etc/apk/repositories \
+    && apk add --no-cache openjdk17-jre-headless iproute2 tzdata ca-certificates \
     && cp /usr/share/zoneinfo/Asia/Shanghai /etc/localtime \
     && echo "Asia/Shanghai" > /etc/timezone
 
