@@ -37,15 +37,19 @@ spec:
       # 镜像在个人版 ACR, 如果节点没有登录态就打开下面这行并建好 secret
       # imagePullSecrets: [{name: acr-cred}]
       initContainers:
-        # 把镜像里烘焙的种子索引搬进 PVC(容器挂载会遮住镜像内 /app/data)
+        # 把镜像里烘焙的种子索引搬进 PVC。
+        # 注意: PVC 只能挂在一个路径上, 主容器挂在 /app/data, 所以这里也挂 /app/data,
+        # 种子直接落到 PVC 里, 主容器第一次启动就能从 /app/data/index.bin.z 导入。
         - name: seed
           image: crpi-p67sy5t6k9nsmste.cn-hangzhou.personal.cr.aliyuncs.com/gengbo/hongguo:latest
+          # 种子 22MB, 拷完才起服务
           command:
             - sh
             - -c
-            - cp -n /app/data/index.bin.z /seed/index.bin.z 2>/dev/null || true
+            - cp -f /app/seed-index/index.bin.z /app/data/index.bin.z && echo '种子已进 PVC'
           volumeMounts:
-            - {name: data, mountPath: /seed}
+            # 只挂 PVC, 镜像里的 /app/seed-index 因此不会被遮住
+            - {name: data, mountPath: /app/data}
       containers:
         - name: hongguo
           image: crpi-p67sy5t6k9nsmste.cn-hangzhou.personal.cr.aliyuncs.com/gengbo/hongguo:latest
@@ -55,7 +59,7 @@ spec:
           env:
             - {name: PORT, value: "8787"}
             - {name: HG_DB, value: /app/data/hongguo.db}
-            - {name: HG_SEED_INDEX, value: /seed/index.bin.z}
+            - {name: HG_SEED_INDEX, value: /app/data/index.bin.z}
             # 每 6 小时增量抓一次站点, 补新剧
             - {name: HG_REFRESH_SEC, value: "21600"}
             # 上游签名进程由 entrypoint 拉起并自动发现端口

@@ -37,6 +37,8 @@ RUN set -eux; \
     if [ -d /app/src/capture ]; then cp -r /app/src/capture /app/capture; \
       echo "打包了 capture"; else echo "没有 server/capture, 跳过"; fi; \
     if [ -f /app/src/seed/index.bin.z ]; then \
+      mkdir -p /app/seed-index; \
+      cp /app/src/seed/index.bin.z /app/seed-index/index.bin.z; \
       cp /app/src/seed/index.bin.z /app/data/index.bin.z; echo "打包了种子索引"; fi; \
     rm -rf /app/src
 
