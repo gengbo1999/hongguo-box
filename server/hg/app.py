@@ -170,11 +170,15 @@ def load_legacy_index(path):
 
 
 def seed_from_legacy():
-    if db_meta("seeded"):
+    # 只有真的导入过才跳过。"none" 表示上次启动时种子还不存在,
+    # 之后种子补进 PVC 时必须重新尝试, 否则空库会被一个 none 永久钉住。
+    seeded = db_meta("seeded")
+    if seeded and seeded != "none":
         return
     if not os.path.exists(SEED_INDEX):
         print(f"[seed] 没有内置索引 {SEED_INDEX}, 跳过", flush=True)
-        db_set_meta("seeded", "none")
+        if not seeded:
+            db_set_meta("seeded", "none")
         return
     t0 = time.time()
     batch = []
