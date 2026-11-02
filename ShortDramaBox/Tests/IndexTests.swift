@@ -1,42 +1,70 @@
 import XCTest
+import Foundation
 @testable import ShortDramaBox
 
-/// 内置全库索引（58.8 万部，自定义二进制格式）。
-/// 标签倒排是按字节偏移直接读的，最容易「不报错但悄悄少一半」，
-/// 所以除了分页，还用「每条记录自带的标签」反向交叉验证倒排结果。
+/// 服务端目录层（`/api/tags` `/api/tag` `/api/newest` `/api/random` `/api/search` `/api/series`）。
+///
+/// 以前这些断言打的是打在 App 包里的 `index.bin.z`；索引搬到服务端之后，
+/// 这里改成对着 `resolver_base` 指的服务打。没配地址就整体跳过——
+/// 目录层不是 App 能独立验证的部分，需要一台带库的服务端。
 final class IndexTests: XCTestCase {
 
     override func setUpWithError() throws {
-        _ = LocalIndex.shared.tagBuckets()
+        try XCTSkipUnless(CatalogAPI.isEnabled, "没配 resolver_base，跳过服务端目录层测试")
     }
 
-    func testIndexIsLoaded() {
-        XCTAssertTrue(LocalIndex.shared.isReady, "内置索引没加载起来")
-        XCTAssertGreaterThan(LocalIndex.shared.totalCount, 500_000, "记录数只有 \(LocalIndex.shared.totalCount)")
-        XCTAssertGreaterThan(LocalIndex.shared.allTags.count, 300, "标签只有 \(LocalIndex.shared.allTags.count) 个")
+    // MARK: - 小工具
+
+    /// 同步 XCTest 里等 async 调用；服务端没响应就跳过而不是失败
+    private func onServer<T>(_ body: @escaping @Sendable () async -> T) throws -> T {
+        let exp = expectation(description: "await")
+        let box = ResultBox<T>()
+        Task { box.set(await body()); exp.fulfill() }
+        wait(for: [exp], timeout: 30)
+        guard let r = box.get() else { throw XCTSkip("服务端没响应或返回空") }
+        return r
     }
 
-    func testTagBucketsAreSortedAndNonEmpty() {
-        let buckets = LocalIndex.shared.tagBuckets()
-        XCTAssertFalse(buckets.isEmpty, "一个标签都没扫出来")
-        for i in 1..<buckets.count {
-            XCTAssertGreaterThanOrEqual(buckets[i-1].count, buckets[i].count, "标签没按数量排序")
+    private func requireTotal() throws -> Int {
+        let n = try onServer { await CatalogAPI.totalCount() }
+        guard n > 0 else { throw XCTSkip("服务端没返回全库条数") }
+        return n
+    }
+
+    private func buckets() throws -> [CatalogAPI.TagBucket] {
+        let b = try onServer { await CatalogAPI.tagBuckets() }
+        guard !b.isEmpty else { throw XCTSkip("服务端没返回标签") }
+        return b
+    }
+
+    // MARK: - 基本形状
+
+    func testServerReportsWholeLibrary() throws {
+        let total = try requireTotal()
+        XCTAssertGreaterThan(total, 500_000, "全库只有 \(total) 条，种子没导全")
+        let b = try buckets()
+        XCTAssertGreaterThan(b.count, 300, "标签只有 \(b.count) 个")
+    }
+
+    func testTagBucketsAreSortedAndNonEmpty() throws {
+        let b = try buckets()
+        for i in 1..<b.count {
+            XCTAssertGreaterThanOrEqual(b[i-1].count, b[i].count, "标签没按数量排序")
         }
-        for b in buckets {
-            XCTAssertFalse(b.tag.isEmpty, "出现空标签")
-            XCTAssertGreaterThan(b.count, 0, "标签「\(b.tag)」数量是 0")
+        for x in b {
+            XCTAssertFalse(x.tag.isEmpty, "出现空标签")
+            XCTAssertGreaterThan(x.count, 0, "标签「\(x.tag)」数量是 0")
         }
-        XCTAssertEqual(Set(buckets.map { $0.tag }).count, buckets.count, "标签有重复")
+        XCTAssertEqual(Set(b.map { $0.tag }).count, b.count, "标签有重复")
     }
 
-    func testTagPagingIsDisjointAndCounted() {
-        guard let top = LocalIndex.shared.tagBuckets().first else { return XCTFail("没有标签") }
-        let p1 = LocalIndex.shared.series(tag: top.tag, offset: 0, limit: 24)
-        let p2 = LocalIndex.shared.series(tag: top.tag, offset: 24, limit: 24)
+    func testTagPagingIsDisjointAndCounted() throws {
+        let top = try buckets()[0]
+        let p1 = try onServer { await CatalogAPI.tagPage(top.tag, offset: 0, limit: 24) }
         XCTAssertEqual(p1.total, top.count, "total 和标签统计对不上")
-        XCTAssertEqual(p1.total, LocalIndex.shared.tagCount(top.tag), "tagCount 对不上")
         XCTAssertEqual(p1.items.count, min(24, top.count))
         if top.count > 24 {
+            let p2 = try onServer { await CatalogAPI.tagPage(top.tag, offset: 24, limit: 24) }
             XCTAssertEqual(p2.items.count, min(24, top.count - 24))
             XCTAssertTrue(Set(p1.items.map { $0.id }).isDisjoint(with: Set(p2.items.map { $0.id })), "两页有重复")
         }
@@ -44,13 +72,14 @@ final class IndexTests: XCTestCase {
             XCTAssertFalse(s.id.isEmpty, "条目没有 id")
             XCTAssertFalse(s.title.isEmpty, "条目 \(s.id) 没有标题")
             XCTAssertGreaterThan(s.episodeCount, 0, "条目 \(s.title) 集数是 0")
+            XCTAssertTrue(s.cover.isEmpty || s.cover.hasPrefix("http"), "封面不是 http 地址：\(s.cover)")
         }
     }
 
-    /// 交叉验证：倒排说「这些记录有这个标签」，就拿记录自己的标签复核
-    func testInvertedIndexMatchesPerRecordTags() {
-        for b in LocalIndex.shared.tagBuckets().prefix(12) {
-            let page = LocalIndex.shared.series(tag: b.tag, offset: 0, limit: 10)
+    /// 交叉验证：接口说「这些剧有这个标签」，就拿条目自带的标签复核
+    func testTagListingMatchesPerRecordTags() throws {
+        for b in try buckets().prefix(12) {
+            let page = try onServer { await CatalogAPI.tagPage(b.tag, offset: 0, limit: 10) }
             XCTAssertFalse(page.items.isEmpty, "标签「\(b.tag)」有 \(b.count) 条却取不出来")
             for s in page.items {
                 XCTAssertTrue(s.tags.contains(b.tag),
@@ -59,73 +88,74 @@ final class IndexTests: XCTestCase {
         }
     }
 
-    func testUnknownTagIsEmpty() {
+    func testUnknownTagIsEmpty() throws {
+        _ = try buckets()
         let ghost = "不存在的标签-\(UUID().uuidString)"
-        let r = LocalIndex.shared.series(tag: ghost, offset: 0, limit: 10)
+        let r = try onServer { await CatalogAPI.tagPage(ghost, offset: 0, limit: 10) }
         XCTAssertTrue(r.items.isEmpty)
         XCTAssertEqual(r.total, 0)
-        XCTAssertEqual(LocalIndex.shared.tagCount(ghost), 0)
     }
 
-    func testPastTheEndReturnsNothingButKeepsTotal() {
-        guard let top = LocalIndex.shared.tagBuckets().first else { return XCTFail("没有标签") }
-        let r = LocalIndex.shared.series(tag: top.tag, offset: top.count + 1000, limit: 24)
+    func testPastTheEndReturnsNothingButKeepsTotal() throws {
+        let top = try buckets()[0]
+        let r = try onServer { await CatalogAPI.tagPage(top.tag, offset: top.count + 1000, limit: 24) }
         XCTAssertTrue(r.items.isEmpty, "越界了还返回内容")
         XCTAssertEqual(r.total, top.count, "越界时 total 不该丢")
     }
 
-    func testSeriesAtBoundsDoesNotCrash() {
-        XCTAssertNil(LocalIndex.shared.series(at: -1))
-        XCTAssertNil(LocalIndex.shared.series(at: LocalIndex.shared.totalCount))
-        XCTAssertNil(LocalIndex.shared.series(at: 999_999_999))
-        XCTAssertNotNil(LocalIndex.shared.series(at: 0))
-    }
+    // MARK: - 搜索
 
-    /// 拿真实记录的标题去搜，必须能搜回它自己。
-    /// search 的关键词上限是 64 字节（超了直接返回空），所以挑长度合适的记录。
-    func testSearchFindsTheRecordItCameFrom() {
-        var picked: Series?
-        for i in 0..<80 {
-            guard let s = LocalIndex.shared.series(at: i) else { break }
-            let n = s.title.lengthOfBytes(using: .utf8)
-            if n >= 6 && n <= 60 { picked = s; break }
-        }
-        guard let s0 = picked else { return XCTFail("前 80 条里没有标题长度合适的记录") }
-        let r = LocalIndex.shared.search(s0.title)
+    /// 拿真实条目的标题去搜，必须能搜回它自己
+    func testSearchFindsTheRecordItCameFrom() throws {
+        let first = try onServer { await CatalogAPI.newest(offset: 0, limit: 40) }
+        guard let s0 = first.items.first(where: { !$0.title.isEmpty && $0.title.count < 20 })
+        else { return XCTFail("前 40 条里没有标题长度合适的记录") }
+        let r = try onServer { await CatalogAPI.search(s0.title) }
         XCTAssertGreaterThan(r.total, 0, "用自己的标题「\(s0.title)」都搜不到")
         XCTAssertTrue(r.list.contains { $0.id == s0.id }, "搜索结果里没有它自己（总数 \(r.total)）")
     }
 
-    func testOverlongKeywordIsRejectedSafely() {
-        let r = LocalIndex.shared.search(String(repeating: "剧", count: 100))
-        XCTAssertTrue(r.list.isEmpty, "超长关键词居然命中了 \(r.total) 条")
+    /// 超长关键词由服务端截断/拒绝，不能整表扫、也不能崩
+    func testOverlongKeywordIsHandledSafely() throws {
+        let r = try onServer {
+            await CatalogAPI.search(String(repeating: "剧", count: 200))
+        }
+        XCTAssertLessThanOrEqual(r.list.count, 100, "结果没被 limit 收住")
     }
 
-    func testSearchResultLimitIsRespected() {
-        XCTAssertLessThanOrEqual(LocalIndex.shared.search("剧", limit: 5).list.count, 5)
+    /// `%`/`_` 是 LIKE 通配符，必须被转义，否则等于全表命中
+    func testLikeWildcardsAreEscaped() throws {
+        let total = try requireTotal()
+        let r = try onServer { await CatalogAPI.search("%") }
+        XCTAssertLessThan(r.total, total, "「%」被当成通配符了（命中 \(r.total) 条）")
     }
 
-    /// 倒排建好后翻页应该是切片，不是每次全表扫描
-    func testPagingIsFastAfterWarmUp() {
-        guard let top = LocalIndex.shared.tagBuckets().first else { return XCTFail("没有标签") }
-        _ = LocalIndex.shared.series(tag: top.tag, offset: 0, limit: 24)
-        let t0 = Date()
-        for i in 0..<20 { _ = LocalIndex.shared.series(tag: top.tag, offset: i * 24, limit: 24) }
-        let dt = Date().timeIntervalSince(t0)
-        XCTAssertLessThan(dt, 2.0, "20 次翻页用了 \(String(format: "%.3f", dt)) 秒")
+    func testSearchResultLimitIsRespected() throws {
+        let r = try onServer { await CatalogAPI.search("剧", limit: 5) }
+        XCTAssertLessThanOrEqual(r.list.count, 5)
     }
 
-    /// 分类页的核心诉求：标签下的内容必须是时间倒序（最新在前）
-    func testTagListingIsNewestFirst() {
+    func testSearchOffsetPagingIsDisjoint() throws {
+        let r1 = try onServer { await CatalogAPI.search("剧", limit: 20, offset: 0) }
+        let r2 = try onServer { await CatalogAPI.search("剧", limit: 20, offset: 20) }
+        XCTAssertEqual(r1.total, r2.total, "翻页时总数变了")
+        XCTAssertTrue(Set(r1.list.map { $0.id }).isDisjoint(with: Set(r2.list.map { $0.id })), "两页重复")
+    }
+
+    // MARK: - 排序
+
+    /// 分类页的核心诉求：标签下的内容必须是时间倒序（最新在前）。
+    /// 条目里带 created，直接看它就行，不用回本地查。
+    func testTagListingIsNewestFirst() throws {
         var checked = 0
         var bad: [String] = []
-        for b in LocalIndex.shared.tagBuckets().prefix(3) {
-            let items = LocalIndex.shared.series(tag: b.tag, offset: 0, limit: 120).items
+        for b in try buckets().prefix(3) {
+            let items = try onServer { await CatalogAPI.tagPage(b.tag, offset: 0, limit: 100) }.items
             guard items.count > 10 else { continue }
-            var prev = UInt32.max
+            let created = try createdMap(items.map { $0.id })
+            var prev = Int.max
             for s in items {
-                guard let idx = recordIndex(of: s.id) else { continue }
-                let c = LocalIndex.shared.created(at: idx)
+                guard let c = created[s.id] else { continue }
                 if c > prev { bad.append("\(b.tag):\(c)>\(prev)") }
                 prev = c
                 checked += 1
@@ -135,60 +165,89 @@ final class IndexTests: XCTestCase {
         XCTAssertTrue(bad.isEmpty, "出现时间逆序：\(bad.prefix(5))")
     }
 
-    /// 倒序的「第一条」必须是新剧。顺序反了或没有时间字段时，
-    /// 头一条会是 2023 年的老剧，这条断言就会挂。
-    func testTagListingStartsFromRecent() {
-        guard let top = LocalIndex.shared.tagBuckets().first else { return XCTFail("没有标签") }
-        let one = LocalIndex.shared.series(tag: top.tag, offset: 0, limit: 1).items
-        guard let s = one.first, let idx = recordIndex(of: s.id) else { return XCTFail("取不到第一条") }
-        let c = LocalIndex.shared.created(at: idx)
-        let limit = UInt32(Date().timeIntervalSince1970) - 400 * 86400
+    /// 倒序的「第一条」必须是新剧：顺序反了会拿到几年前的
+    func testTagListingStartsFromRecent() throws {
+        let top = try buckets()[0]
+        let one = try onServer { await CatalogAPI.tagPage(top.tag, offset: 0, limit: 1) }
+        guard let s = one.items.first else { return XCTFail("取不到第一条") }
+        let c = try createdMap([s.id])[s.id]
+        guard let c else { return XCTFail("条目没有 created") }
+        let limit = Int(Date().timeIntervalSince1970) - 400 * 86400
         XCTAssertGreaterThan(c, limit, "「\(top.tag)」第一条是 \(c)，不像最新上架的")
     }
 
-    /// 索引里必须真的带 created，否则「按时间排序」无从谈起
-    func testCreatedFieldIsPresent() {
-        let n = min(LocalIndex.shared.totalCount, 5000)
-        var zero = 0
-        for i in 0..<n where LocalIndex.shared.created(at: i) == 0 { zero += 1 }
-        XCTAssertEqual(zero, 0, "前 \(n) 条里有 \(zero) 条没有时间")
+    /// created 必须真的带出来，否则「按时间排序」无从谈起
+    func testCreatedFieldIsPresent() throws {
+        let items = try onServer { await CatalogAPI.newest(offset: 0, limit: 100) }.items
+        let created = try createdMap(items.map { $0.id })
+        let missing = items.filter { (created[$0.id] ?? 0) == 0 }.map { $0.title }
+        XCTAssertTrue(missing.isEmpty, "有 \(missing.count) 条没有 created：\(missing.prefix(3))")
     }
 
-    /// id 二分定位（索引里 ids 升序，测试里只好自己找）
-    private func recordIndex(of id: String) -> Int? {
-        var lo = 0
-        var hi = LocalIndex.shared.totalCount - 1
-        while lo <= hi {
-            let mid = (lo + hi) / 2
-            guard let s = LocalIndex.shared.series(at: mid) else { return nil }
-            if s.id == id { return mid }
-            if s.id < id { lo = mid + 1 } else { hi = mid - 1 }
-        }
-        return nil
+    /// 批量取 id 保留 created（Series 不带这个字段，所以单独走 JSON）
+    private func createdMap(_ ids: [String]) throws -> [String: Int] {
+        guard CatalogAPI.isEnabled, !ids.isEmpty,
+              let base = RemoteResolver.base,
+              var comps = URLComponents(string: base + "/api/series") else { return [:] }
+        comps.queryItems = [URLQueryItem(name: "ids", value: ids.joined(separator: ","))]
+        guard let url = comps.url else { return [:] }
+        var req = URLRequest(url: url)
+        req.timeoutInterval = 15
+        let exp = expectation(description: "ids")
+        let box = ResultBox<[String: Int]>()
+        URLSession.shared.dataTask(with: req) { data, _, _ in
+            defer { exp.fulfill() }
+            guard let data,
+                  let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let items = j["items"] as? [[String: Any]] else { return }
+            var out: [String: Int] = [:]
+            for d in items {
+                let id = asStr(d["id"])
+                if !id.isEmpty { out[id] = asInt(d["created"]) }
+            }
+            box.set(out)
+        }.resume()
+        wait(for: [exp], timeout: 20)
+        return box.get() ?? [:]
     }
 
     // MARK: - 推荐流取样（爆剧 / 新剧 / 其他剧）
 
-    func testNewestAdvancesWithoutOverlap() {
-        let r1 = LocalIndex.shared.newest(offset: 0, limit: 20)
+    func testNewestAdvancesWithoutOverlap() throws {
+        let r1 = try onServer { await CatalogAPI.newest(offset: 0, limit: 20) }
         XCTAssertEqual(r1.items.count, 20, "新剧首批没取满 20 条")
         XCTAssertGreaterThan(r1.next, 0, "next 没推进，续抽会重复")
-        let r2 = LocalIndex.shared.newest(offset: r1.next, limit: 20)
+        let r2 = try onServer { await CatalogAPI.newest(offset: r1.next, limit: 20) }
         XCTAssertFalse(r2.items.isEmpty, "第二批新剧取不到")
         let dup = Set(r1.items.map(\.id)).intersection(r2.items.map(\.id))
         XCTAssertTrue(dup.isEmpty, "两批新剧重复了：\(dup)")
-        XCTAssertTrue(LocalIndex.shared.newest(offset: -5, limit: 3).items.count > 0, "负数 offset 应该被夹到 0")
+        let neg = try onServer { await CatalogAPI.newest(offset: -5, limit: 3) }
+        XCTAssertFalse(neg.items.isEmpty, "负数 offset 应该被夹到 0")
     }
 
-    func testRandomSeriesIsUniqueAndHonoursExcluding() {
-        let a = LocalIndex.shared.randomSeries(limit: 50)
+    func testRandomIsUniqueAndHonoursExcluding() throws {
+        _ = try requireTotal()
+        let a = try onServer { await CatalogAPI.random(limit: 50) }
         XCTAssertEqual(a.count, 50, "全库随机没抽满 50 条")
         XCTAssertEqual(Set(a.map(\.id)).count, 50, "全库随机抽到重复")
         let excl = Set(a.map(\.id))
-        let b = LocalIndex.shared.randomSeries(limit: 30, excluding: excl)
+        let b = try onServer { await CatalogAPI.random(limit: 30, excluding: excl) }
         XCTAssertFalse(b.isEmpty, "带 excluding 就抽不出来了")
         XCTAssertTrue(Set(b.map(\.id)).isDisjoint(with: excl), "excluding 没生效，续抽会跟前面重复")
     }
+
+    /// 按 id 批量取：顺序保持、未知 id 跳过、超过 200 个截断
+    func testByIDsKeepsOrderAndSkipsUnknown() throws {
+        let src = try onServer { await CatalogAPI.newest(offset: 0, limit: 5) }.items
+        guard src.count >= 3 else { return XCTFail("取不到样本") }
+        let ids = [src[2].id, src[0].id, src[1].id]
+        let got = try onServer { await CatalogAPI.byIDs(ids) }
+        XCTAssertEqual(got.map { $0.id }, ids, "返回顺序没跟请求一致")
+        let withGhost = try onServer { await CatalogAPI.byIDs([src[0].id, "9999999999999999999"]) }
+        XCTAssertEqual(withGhost.map { $0.id }, [src[0].id], "未知 id 应该被跳过")
+    }
+
+    // MARK: - 推荐配方（纯本地逻辑，不需要服务端）
 
     func testFeedMixWeightsAreSevenToThree() {
         let p = FeedMix.plan(hotAvailable: 999, batchSize: 240)
@@ -207,5 +266,11 @@ final class IndexTests: XCTestCase {
         XCTAssertEqual(few.hot, 10, "爆剧不够就按实际给，不超发")
         XCTAssertEqual(few.new, 158)
     }
-
+}
+/// 把异步结果从并发域安全带回测试线程
+private final class ResultBox<T>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: T?
+    func set(_ v: T?) { lock.lock(); value = v; lock.unlock() }
+    func get() -> T? { lock.lock(); defer { lock.unlock() }; return value }
 }

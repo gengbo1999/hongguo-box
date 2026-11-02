@@ -181,16 +181,16 @@ enum VideoFit {
 
 // MARK: - 推荐流混合配方
 
-/// 推荐流的混合配方：**爆剧 : 新剧 = 7 : 3**，「其他剧」（内置全库均匀随机）占三成。
+/// 推荐流的混合配方：**爆剧 : 新剧 = 7 : 3**，「其他剧」（服务端全库随机）占三成。
 ///
 /// 想更偏爆剧就把 `hotWeight` 调大，想多看新剧就调大 `newWeight`，
 /// 想多刷到冷门老剧就调大 `otherShare` —— 只改这三个数，别的都不用动。
 enum FeedMix {
     /// 爆剧（首页板块 + 频道首页的站方推荐位）
     static let hotWeight = 7
-    /// 新剧（内置全库「最新在前」）
+    /// 新剧（服务端全库「最新在前」）
     static let newWeight = 3
-    /// 其他剧（内置全库均匀随机）在每一批里占的比例
+    /// 其他剧（服务端全库随机）在每一批里占的比例
     static let otherShare = 0.30
     /// 每批条数（首批 + 每次续抽）
     static let batchSize = 240
@@ -242,8 +242,8 @@ final class FeedModel: ObservableObject {
     private var currentIndex = 0
     private let prefetchAhead = 1
 
-    /// 推荐池：**爆剧 : 新剧 = 7 : 3**，再加约三成从内置全库（58.8 万条）均匀随机
-    /// 抽的「其他剧」；全部按 id 去重后整批打乱。抽样/解码都在后台线程。
+    /// 推荐池：**爆剧 : 新剧 = 7 : 3**，再加约三成从服务端全库（58.8 万条）随机
+    /// 抽的「其他剧」；全部按 id 去重后整批打乱。
     func load() async {
         loading = true; error = nil
         hotCursor = 0; newCursor = 0; seenIDs.removeAll()
@@ -260,16 +260,12 @@ final class FeedModel: ObservableObject {
         var hotSeen = Set<String>()
         hotPool = hot.filter { !$0.title.isEmpty && hotSeen.insert($0.id).inserted }
 
-        // 内置全库（21MB 压缩、58.8 万条）：本地解码，不联网。
-        // 首次要解压 + 建「最新在前」顺序，都别挂主线程。
-        let info = await Task.detached(operation: {
-            (ready: LocalIndex.shared.isReady, total: LocalIndex.shared.totalCount)
-        }).value
-        sampleTotal = info.total
+        // 全库条数从服务端拿；拿不到就当没有全库，只用爆剧池。
+        sampleTotal = await CatalogAPI.totalCount()
 
         var batch = await nextBatch()
-        if batch.isEmpty && !info.ready {
-            // 内置索引没起来（资源缺失）时兜底：至少把爆剧池打乱放出去
+        if batch.isEmpty && sampleTotal == 0 {
+            // 服务端不可用时兜底：至少把爆剧池打乱放出去
             batch = hotPool.shuffled().map { FeedItem(series: $0) }
             poolNote = "首页推荐 \(batch.count) 部，随机播放"
         } else {
@@ -302,9 +298,7 @@ final class FeedModel: ObservableObject {
         let newOffset = newCursor
         var newGot = 0
         if newWant > 0 {
-            let r = await Task.detached(operation: {
-                LocalIndex.shared.newest(offset: newOffset, limit: newWant)
-            }).value
+            let r = await CatalogAPI.newest(offset: newOffset, limit: newWant)
             newCursor = r.next
             picked += r.items
             newGot = r.items.count
@@ -314,10 +308,7 @@ final class FeedModel: ObservableObject {
         let otherWant = plan.other + (newWant - newGot)
         if otherWant > 0 {
             let excl = seenIDs.union(picked.map(\.id))
-            let more = await Task.detached(operation: {
-                LocalIndex.shared.randomSeries(limit: otherWant, excluding: excl)
-            }).value
-            picked += more
+            picked += await CatalogAPI.random(limit: otherWant, excluding: excl)
         }
 
         // 4) 全局去重 + 整批打乱
@@ -447,7 +438,7 @@ final class FeedModel: ObservableObject {
         }
         guard isCurrent(i, series.id), !Task.isCancelled else { return }
 
-        // 简介只有详情接口才有（内置索引里没存，省体积），补进这一页
+        // 简介只有详情接口才有（目录层的条目不带简介，省流量），补进这一页
         if items[i].series.intro.isEmpty, !full.intro.isEmpty {
             items[i].series.intro = full.intro
         }

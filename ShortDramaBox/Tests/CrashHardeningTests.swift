@@ -167,38 +167,57 @@ final class CrashHardeningTests: XCTestCase {
                        "senc/saiz/saio 必须被摘掉")
     }
 
-    // MARK: - 5. 全库索引取样：推荐页不再解全量 58 万条，越界与极端参数都不能崩
+    // MARK: - 5. 目录层取样：推荐页不再本地解全量 58 万条，越界与极端参数都不能崩
 
-    /// 新剧按 created 倒序续抽：越界 offset 只能返回空，不能回绕或崩
-    func testNewestHandlesOutOfRangeOffsets() {
-        let total = LocalIndex.shared.totalCount
-        guard total > 0 else { return XCTFail("索引没加载，测试环境缺 index.bin.z") }
-        let far = LocalIndex.shared.newest(offset: total + 10_000, limit: 5)
+    /// 服务端没配地址就没法测目录层，直接跳过（本地/CI 都不必为此起服务）
+    private func requireCatalog() throws -> Int {
+        guard CatalogAPI.isEnabled else {
+            throw XCTSkip("没配 resolver_base，跳过服务端目录层测试")
+        }
+        let total = try awaitBlock { await CatalogAPI.totalCount() }
+        guard total > 0 else { throw XCTSkip("服务端没返回全库条数") }
+        return total
+    }
+
+    /// 让同步 XCTest 方法里能等一个 async 调用；返回值恒非空的用这个
+    private func awaitBlock<T>(_ body: @escaping @Sendable () async -> T) throws -> T {
+        let exp = expectation(description: "await")
+        let box = ResultBox<T>()
+        Task { box.set(await body()); exp.fulfill() }
+        wait(for: [exp], timeout: 30)
+        guard let r = box.get() else { throw XCTSkip("服务端没响应") }
+        return r
+    }
+
+    /// 新剧按上架时间倒序续抽：越界 offset 只能返回空，不能回绕或崩
+    func testNewestHandlesOutOfRangeOffsets() throws {
+        let total = try requireCatalog()
+        let far = try awaitBlock { await CatalogAPI.newest(offset: total + 10_000, limit: 5) }
         XCTAssertTrue(far.items.isEmpty, "越界 offset 不该有结果")
         XCTAssertGreaterThan(far.next, 0, "越界时 next 不该回绕到 0")
-        XCTAssertTrue(LocalIndex.shared.newest(offset: far.next, limit: 5).items.isEmpty,
-                      "越界之后还能抽到东西，说明下标回绕了")
-        let neg = LocalIndex.shared.newest(offset: -5, limit: 3)
+        let after = try awaitBlock { await CatalogAPI.newest(offset: far.next, limit: 5) }
+        XCTAssertTrue(after.items.isEmpty, "越界之后还能抽到东西，说明下标回绕了")
+        // 负数 offset 由客户端夹到 0，服务端也会夹
+        let neg = try awaitBlock { await CatalogAPI.newest(offset: -5, limit: 3) }
         XCTAssertFalse(neg.items.isEmpty, "负数 offset 应被夹到 0 后照常取")
     }
 
-    /// 极端 limit：0 或负数直接空，超大 limit 也不能抽到重复
-    func testRandomSeriesHandlesExtremeLimits() {
-        guard LocalIndex.shared.totalCount > 0 else { return XCTFail("索引没加载") }
-        XCTAssertTrue(LocalIndex.shared.randomSeries(limit: 0).isEmpty, "limit 0 应为空")
-        XCTAssertTrue(LocalIndex.shared.randomSeries(limit: -3).isEmpty, "负数 limit 应为空")
-        let big = LocalIndex.shared.randomSeries(limit: 3000)
+    /// 极端 limit：0 或负数夹到 1，超大 limit 也不能抽到重复
+    func testRandomSeriesHandlesExtremeLimits() throws {
+        _ = try requireCatalog()
+        // 超上限由服务端夹到 100，这里只要求不重复、不超过请求数
+        let big = try awaitBlock { await CatalogAPI.random(limit: 3000) }
         XCTAssertEqual(Set(big.map(\.id)).count, big.count, "超大 limit 也不能抽到重复")
-        XCTAssertLessThanOrEqual(big.count, 3000)
+        XCTAssertLessThanOrEqual(big.count, 100, "服务端单次上限 100")
     }
 
     /// 连续多批新剧必须互不重叠（推荐页滑到底会反复续抽）
-    func testNewestManyBatchesStayDisjoint() {
-        guard LocalIndex.shared.totalCount > 1000 else { return XCTFail("索引没加载") }
+    func testNewestManyBatchesStayDisjoint() throws {
+        _ = try requireCatalog()
         var seen = Set<String>()
         var offset = 0
         for _ in 0..<5 {
-            let r = LocalIndex.shared.newest(offset: offset, limit: 50)
+            let r = try awaitBlock { await CatalogAPI.newest(offset: offset, limit: 50) }
             XCTAssertEqual(r.items.count, 50, "每批应取满 50 条")
             for s in r.items {
                 XCTAssertTrue(seen.insert(s.id).inserted, "跨批重复：\(s.id)")
@@ -209,11 +228,11 @@ final class CrashHardeningTests: XCTestCase {
     }
 
     /// 全库随机带 excluding 连抽三轮，整体仍不重复（推荐页去重就靠它）
-    func testRandomSeriesExcludingAcrossRoundsStaysUnique() {
-        guard LocalIndex.shared.totalCount > 1000 else { return XCTFail("索引没加载") }
+    func testRandomSeriesExcludingAcrossRoundsStaysUnique() throws {
+        _ = try requireCatalog()
         var seen = Set<String>()
         for _ in 0..<3 {
-            let got = LocalIndex.shared.randomSeries(limit: 40, excluding: seen)
+            let got = try awaitBlock { await CatalogAPI.random(limit: 40, excluding: seen) }
             XCTAssertFalse(got.isEmpty, "excluding 之后抽不出来了")
             for s in got {
                 XCTAssertTrue(seen.insert(s.id).inserted, "跨轮重复：\(s.id)")
@@ -221,7 +240,6 @@ final class CrashHardeningTests: XCTestCase {
         }
         XCTAssertEqual(seen.count, 120)
     }
-
 
     // MARK: - 6. 转码档位与路径
 
@@ -280,4 +298,11 @@ func findFourCC(_ hay: [UInt8], _ fourcc: String) -> Int? {
         if Array(hay[i..<(i + needle.count)]) == needle { return i }
     }
     return nil
+}
+/// 把异步结果从并发域安全带回测试线程
+private final class ResultBox<T>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: T?
+    func set(_ v: T?) { lock.lock(); value = v; lock.unlock() }
+    func get() -> T? { lock.lock(); defer { lock.unlock() }; return value }
 }

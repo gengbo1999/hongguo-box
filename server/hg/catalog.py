@@ -257,8 +257,7 @@ def random_series(c, limit=20, exclude=()):
     """全库随机: 先随机 rowid, 再取该位置之后的第一行。
 
     比 ORDER BY RANDOM() 便宜(不用给 58 万行排序), 又不像"随机起点后连取 N 条"
-    那样一次吐出一整段相邻的剧。排除集命中就重新抽, 抽不满就少给几条 ——
-    客户端 LocalIndex.randomSeries 也是这个行为。
+    那样一次吐出一整段相邻的剧。排除集命中就重新抽, 抽不满就少给几条。
     """
     limit = max(1, min(int(limit or 20), MAX_LIMIT))
     skip = {x for x in exclude if x}

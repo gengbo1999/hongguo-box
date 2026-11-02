@@ -18,11 +18,6 @@ targets:
     platform: iOS
     sources:
       - path: Sources
-        excludes:
-          - "Resources/**"
-      # 全库索引（约 58.8 万部），压缩后约 20.5 MB，打进 App 包
-      - path: Sources/Resources
-        buildPhase: resources
     info:
       path: Info.plist
       properties:
@@ -52,8 +47,9 @@ targets:
         Debug:
           ENABLE_TESTABILITY: YES
 # 单元测试：跑在 iOS 模拟器里（CI 的 macOS runner 有 Xcode + 模拟器）。
-  # 用 TEST_HOST 挂到 App 上，这样 Bundle.main 就是 App 包，
-  # LocalIndex 能读到真正的 index.bin.z，测的就是真机上那份资源。
+  # 用 TEST_HOST 挂到 App 上，测的是被测模块本身。
+  # 目录层的那些用例要走服务端：在 App 的 UserDefaults 里配好 `resolver_base`
+  # （和取流网关同一处设置）才会真跑，没配就整体跳过。
   ShortDramaBoxTests:
     type: bundle.unit-test
     platform: iOS

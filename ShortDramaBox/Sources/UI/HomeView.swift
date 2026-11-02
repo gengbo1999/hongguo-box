@@ -178,21 +178,21 @@ struct ChannelGridView: View {
 /// 分类页 = **按标签翻库**。
 ///
 /// 原来这里是「频道」（真人剧 / 漫剧 / AI剧），但那和首页那几行是同一批数据、
-/// 只是换个排版，等于没有分类价值。改成按标签浏览：内置索引里有全库
-/// 58.8 万部的标签（378 个），倒排一次之后按标签翻库就是直接切片。
+/// 只是换个排版，等于没有分类价值。改成按标签浏览：服务端目录层维护全库
+/// 58.8 万部的标签倒排（378 个），翻页是一次索引切片，这里只管连翻。
 struct BrowseView: View {
-    @State private var buckets: [LocalIndex.TagBucket] = []
+    @State private var buckets: [CatalogAPI.TagBucket] = []
     @State private var tag: String?
     @State private var building = true
     @State private var showAll = false
 
     /// 顶部只展示最热的一批，其余标签进「查看更多」
     private static let hotCount = 16
-    private var hot: [LocalIndex.TagBucket] { Array(buckets.prefix(Self.hotCount)) }
+    private var hot: [CatalogAPI.TagBucket] { Array(buckets.prefix(Self.hotCount)) }
 
     /// 选中的标签若不在热门里（从「查看更多」挑的），也插到最前面显示，
     /// 否则顶部会看不出当前选的是哪个。
-    private var shown: [LocalIndex.TagBucket] {
+    private var shown: [CatalogAPI.TagBucket] {
         guard let t = tag, !hot.contains(where: { $0.tag == t }),
               let b = buckets.first(where: { $0.tag == t }) else { return hot }
         return [b] + hot
@@ -205,7 +205,9 @@ struct BrowseView: View {
                     ProgressView("正在整理标签…")
                 } else if buckets.isEmpty {
                     CompatUnavailable("没有标签数据", systemImage: "tag.slash",
-                                       desc: "内置索引里没有读到标签")
+                                       desc: CatalogAPI.isEnabled
+                                           ? "服务端没返回标签，稍后再试"
+                                           : "没配服务端地址，标签浏览不可用")
                 } else {
                     VStack(spacing: 0) {
                         tagHeader
@@ -226,11 +228,8 @@ struct BrowseView: View {
             }
             .task {
                 guard buckets.isEmpty else { return }
-                let b = await Task.detached(priority: .userInitiated) {
-                    LocalIndex.shared.tagBuckets()
-                }.value
-                buckets = b
-                if tag == nil { tag = b.first?.tag }
+                buckets = await CatalogAPI.tagBuckets()
+                if tag == nil { tag = buckets.first?.tag }
                 building = false
             }
         }
@@ -282,14 +281,14 @@ struct BrowseView: View {
     }
 }
 
-/// 全部标签。378 个标签靠一个搜索框找。
+/// 全部标签。几百个标签靠一个搜索框找。
 private struct AllTagsView: View {
-    let buckets: [LocalIndex.TagBucket]
+    let buckets: [CatalogAPI.TagBucket]
     @Binding var selected: String?
     @Binding var dismissTo: Bool
     @State private var q = ""
 
-    private var list: [LocalIndex.TagBucket] {
+    private var list: [CatalogAPI.TagBucket] {
         let k = q.trimmingCharacters(in: .whitespaces)
         guard !k.isEmpty else { return buckets }
         return buckets.filter { $0.tag.localizedCaseInsensitiveContains(k) }
@@ -383,10 +382,7 @@ private struct TagResultGrid: View {
         loading = true
         defer { loading = false }
         let off = page * per
-        // 首次会建倒排索引（全库扫描），别挂在主线程上
-        let r = await Task.detached(priority: .userInitiated) {
-            LocalIndex.shared.series(tag: tag, offset: off, limit: per)
-        }.value
+        let r = await CatalogAPI.tagPage(tag, offset: off, limit: per)
         total = r.total
         if r.items.isEmpty { finished = true } else {
             items.append(contentsOf: r.items)

@@ -27,11 +27,12 @@ server/
 之后靠 `HG_REFRESH_SEC`（默认 6 小时）在后台增量抓 `hongguoduanju.com` 的首页和四个分类，
 把新剧补进库。抓取复刻了客户端 `API.swift` 的 `_ROUTER_DATA` 解析。
 
-想让服务端继承全量库又不改镜像，就把种子索引放进构建上下文：
+想让服务端继承全量库又不改镜像，就把种子索引放进构建上下文。
+客户端已经不再打包这份索引了，种子从历史提交里取（仓库最后一次带它的版本）：
 
 ```sh
 mkdir -p server/seed
-cp ShortDramaBox/Sources/Resources/index.bin.z server/seed/index.bin.z
+git show 4e4e266^:ShortDramaBox/Sources/Resources/index.bin.z > server/seed/index.bin.z
 ```
 
 ## 接口

@@ -1,16 +1,16 @@
 import SwiftUI
 
-/// 搜索 = 内置全库索引（约 58.8 万部）＋ 站内服务端搜索（按站方相关度排序）。
+/// 搜索 = 服务端全库（约 58.8 万部）＋ 站内服务端搜索（按站方相关度排序）。
 ///
 /// 为什么要两份：站内搜索只覆盖它自己的索引，实测拿全库随机片名去搜，
-/// 精确命中率只有约 50%（冷门老剧基本搜不到）；内置索引覆盖 99.96%，
+/// 精确命中率只有约 50%（冷门老剧基本搜不到）；我们的全库覆盖 99.96%，
 /// 但它是"片名包含"匹配，没有站方的相关度。两者合并去重才既不漏又好找。
 ///
 /// 同名各季是独立剧集（标题带「第N季」），两边都会把它们一起返回。
 struct SearchView: View {
     @State private var q = ""
 
-    // 内置索引
+    // 服务端全库
     @State private var local: [Series] = []
     @State private var localTotal = 0
     @State private var indexCount = 0
@@ -25,6 +25,9 @@ struct SearchView: View {
     @State private var remoteBusy = false
     @State private var remoteTask: Task<Void, Never>?
 
+    /// 全库一页前端最多展示多少条（服务端单次上限 100）
+    private static let localLimit = 100
+
     private var keyword: String { q.trimmingCharacters(in: .whitespaces) }
 
     private var results: [Series] {
@@ -32,7 +35,7 @@ struct SearchView: View {
         guard !k.isEmpty else { return [] }
         var out: [Series] = []
         var ids = Set<String>()
-        // 站内结果按站方相关度在前，内置索引补充在后
+        // 站内结果按站方相关度在前，全库结果补充在后
         for s in remote where ids.insert(s.id).inserted { out.append(s) }
         for s in local where ids.insert(s.id).inserted { out.append(s) }
         return out
@@ -70,14 +73,14 @@ struct SearchView: View {
         VStack(spacing: 12) {
             if loadingIndex {
                 ProgressView()
-                Text("正在装载内置全库索引…")
+                Text("正在连接全库…")
                     .font(.system(size: 13)).foregroundStyle(.secondary)
             } else {
                 CompatUnavailable(
                     "搜索短剧", systemImage: "magnifyingglass",
                     desc: indexReady
                         ? "输入片名，在 \(indexCount) 部里搜索\n同时也会去站内再找一遍"
-                        : "输入片名搜索站内\n（内置索引未能载入）")
+                        : "输入片名搜索站内\n（没配服务端地址，全库不可用）")
             }
         }
     }
@@ -105,7 +108,7 @@ struct SearchView: View {
     private var summary: String {
         var parts: [String] = []
         if localTotal > 0 {
-            parts.append("内置索引命中 \(localTotal) 部")
+            parts.append("全库命中 \(localTotal) 部")
             if local.count < localTotal { parts.append("显示前 \(local.count) 部") }
         }
         if remoteTotal > 0 { parts.append("站内命中 \(remoteTotal) 部") }
@@ -115,7 +118,7 @@ struct SearchView: View {
 
     // MARK: - 搜索调度
 
-    /// 输入停顿 260ms 后再动手：内置索引是本地扫描，站内是网络请求
+    /// 输入停顿 260ms 后再动手：两个请求都走网络，别把每个按键都发出去
     @MainActor
     private func schedule(_ raw: String) {
         remoteTask?.cancel()
@@ -130,9 +133,7 @@ struct SearchView: View {
         localTask = Task { @MainActor in
             try? await Task.sleep(nanoseconds: 260_000_000)
             guard !Task.isCancelled else { return }
-            let r = await Task.detached(priority: .userInitiated) {
-                LocalIndex.shared.search(key, limit: 300)
-            }.value
+            let r = await CatalogAPI.search(key, limit: Self.localLimit)
             guard !Task.isCancelled, key == keyword else { return }
             local = r.list
             localTotal = r.total
@@ -151,21 +152,16 @@ struct SearchView: View {
             } catch {
                 guard !Task.isCancelled, key == keyword else { return }
                 remote = []; remoteTotal = 0
-                remoteNote = "站内搜索没通，只用了内置索引"
+                remoteNote = "站内搜索没通，只用了全库索引"
             }
             remoteBusy = false
         }
     }
 
-    /// 首次进入时后台解压内置索引（约 34 MB），不阻塞界面
-    ///
-    /// 关键：isReady / totalCount 都会触发整包解压（20.5MB 压缩 → 34MB 展开）。
-    /// 原来第一句 `if LocalIndex.shared.isReady` 是直接在 MainActor 上跑的，
-    /// 等于进搜索页先卡死一下。现在判断和取值全部丢进后台，主线程只收一个 Int。
+    /// 进页面时先问一下服务端全库有多少条，用来显示「在 N 部里搜」。
+    /// 拿不到就当作没有全库（0），这时只搜站内。
     private func warmUp() async {
-        let n = await Task.detached(priority: .utility) {
-            LocalIndex.shared.isReady ? LocalIndex.shared.totalCount : 0
-        }.value
+        let n = await CatalogAPI.totalCount()
         indexCount = n
         indexReady = n > 0
         loadingIndex = false
