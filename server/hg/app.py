@@ -2,9 +2,10 @@
 """短剧盒子服务端。
 
 一个进程同时干四件事:
-1. 索引服务: SQLite 里存全量剧集, 支持搜索/详情, 数据来自内置老索引 + 站点定时爬取
+1. 索引 + 目录: SQLite 里存全量剧集, 标签云/标签翻页/最新/随机/搜索/详情全在这里算,
+   数据来自内置老索引 + 站点定时爬取(查询部分见 catalog.py)
 2. 上游代理: /resolve 把客户端的签名请求转给常驻 unidbg 签名进程
-3. 媒体代理: /api/media 直出播放地址(带 Range), 客户端不用再自己处理
+3. 只做 API: 不代理媒体字节, 播放地址发给客户端自己拉
 4. 健康检查: /healthz
 
 只用标准库, 方便在 alpine 里跑。
@@ -27,6 +28,7 @@ import urllib.request
 import zlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+import catalog
 import upstream
 
 DB_PATH = os.environ.get("HG_DB", "/data/hongguo.db")
@@ -54,16 +56,7 @@ def conn():
             _conn.row_factory = sqlite3.Row
             _conn.execute("PRAGMA journal_mode=WAL")
             _conn.execute("PRAGMA synchronous=NORMAL")
-            _conn.execute(
-                """CREATE TABLE IF NOT EXISTS series(
-                    sid TEXT PRIMARY KEY, title TEXT NOT NULL, cover TEXT DEFAULT '',
-                    intro TEXT DEFAULT '', eps INTEGER DEFAULT 0, tags TEXT DEFAULT '',
-                    vids TEXT DEFAULT '', created INTEGER DEFAULT 0,
-                    accessed INTEGER DEFAULT 0, updated INTEGER DEFAULT 0)"""
-            )
-            _conn.execute("CREATE INDEX IF NOT EXISTS ix_title ON series(title)")
-            _conn.execute("CREATE INDEX IF NOT EXISTS ix_created ON series(created)")
-            _conn.commit()
+            catalog.ensure_schema(_conn)
         return _conn
 
 
@@ -105,6 +98,18 @@ def upsert_many(rows):
 
 def count_series():
     return conn().execute("SELECT COUNT(*) n FROM series").fetchone()["n"]
+
+
+def rebuild_catalog_index():
+    """标签倒排按需重建。用独立连接: 重建是长写事务, 别和请求线程共用一个连接。"""
+    c = sqlite3.connect(DB_PATH, timeout=60)
+    c.row_factory = sqlite3.Row
+    try:
+        c.execute("PRAGMA journal_mode=WAL")
+        catalog.ensure_schema(c)
+        return catalog.ensure_tag_index(c)
+    finally:
+        c.close()
 
 
 # ------------------------------------------------------- 老索引导入(一次性)
@@ -255,7 +260,7 @@ def series_row(d):
     return (
         _s(d.get("series_id")),
         _s(d.get("series_name")) or _s(d.get("series_title")),
-        _s(d.get("series_cover")),
+        catalog.cover_hash(_s(d.get("series_cover"))),
         _s(d.get("series_intro")),
         _i(d.get("episode_cnt")),
         ",".join([t for t in tag_names if t]),
@@ -330,6 +335,10 @@ def refresh(budget_sec=120):
     db_set_meta("refreshed", int(time.time()))
     db_set_meta("refresh_rows", n)
     print(f"[crawl] 本轮 {n} 条, 用时 {time.time() - t0:.1f}s, 库存 {count_series()}", flush=True)
+    try:
+        rebuild_catalog_index()
+    except Exception as e:  # noqa: BLE001
+        print(f"[catalog] 标签倒排重建失败 {e!r}", flush=True)
     return n
 
 
@@ -363,6 +372,19 @@ def fetch_detail(sid):
 
 def jdump(obj):
     return json.dumps(obj, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+
+
+def _clamp_int(values, default, lo, hi):
+    try:
+        v = int((values or [""])[0])
+    except (TypeError, ValueError):
+        v = default
+    return max(lo, min(v, hi))
+
+
+def _page(qs, default_limit=catalog.DEFAULT_LIMIT):
+    return (_clamp_int(qs.get("offset"), 0, 0, 10 ** 9),
+            _clamp_int(qs.get("limit"), default_limit, 1, catalog.MAX_LIMIT))
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -407,8 +429,10 @@ class Handler(BaseHTTPRequestHandler):
         if p in ("/healthz", "/"):
             return self._send(200, {
                 "ok": True, "service": "hongguo-box", "version": "1.0.0",
-                "series": count_series(), "seeded": db_meta("seeded"),
-                "refreshed": db_meta("refreshed"), "signer": upstream.signer_available(),
+                "series": count_series(), "tags": catalog.tag_count(conn()),
+                "seeded": db_meta("seeded"), "refreshed": db_meta("refreshed"),
+                "catalog_index_at": db_meta("tag_index_at"),
+                "signer": upstream.signer_available(),
             })
 
         if p == "/api/nav":
@@ -417,43 +441,30 @@ class Handler(BaseHTTPRequestHandler):
 
         if p == "/api/search":
             q = (qs.get("q") or [""])[0].strip()
-            try:
-                limit = min(max(int((qs.get("limit") or ["30"])[0]), 1), 100)
-                offset = max(int((qs.get("offset") or ["0"])[0]), 0)
-            except ValueError:
-                limit, offset = 30, 0
-            if not q:
-                return self._send(200, {"ok": True, "total": 0, "items": []})
-            like = f"%{q}%"
-            c = conn()
-            rows = c.execute(
-                """SELECT sid,title,cover,eps,tags,created FROM series
-                   WHERE title LIKE ? OR sid=? ORDER BY created DESC LIMIT ? OFFSET ?""",
-                (like, q, limit, offset)).fetchall()
-            total = c.execute("SELECT COUNT(*) n FROM series WHERE title LIKE ?",
-                              (like,)).fetchone()["n"]
-            return self._send(200, {"ok": True, "total": total, "items": [
-                {"id": r["sid"], "title": r["title"], "cover": r["cover"],
-                 "eps": r["eps"], "tags": [t for t in r["tags"].split(",") if t]}
-                for r in rows]})
+            off, lim = _page(qs, default_limit=30)
+            r = catalog.search(conn(), q, offset=off, limit=lim)
+            return self._send(200, {"ok": True, **r})
 
         if p == "/api/detail":
             sid = (qs.get("sid") or [""])[0].strip()
             if not sid:
                 return self._send(400, {"ok": False, "error": "missing_sid"})
-            row = conn().execute("SELECT * FROM series WHERE sid=?", (sid,)).fetchone()
-            vids = [v for v in (row["vids"] or "").split(",") if v] if row else []
+            sql = ("SELECT sid,title,cover,intro,eps,tags,created,vids"
+                   " FROM series WHERE sid=?")
+            row = conn().execute(sql, (sid,)).fetchone()
+            vids = [v for v in (row[7] or "").split(",") if v] if row else []
             if not vids:
                 d, vids = fetch_detail(sid)
                 if d and not row:
-                    row = conn().execute("SELECT * FROM series WHERE sid=?", (sid,)).fetchone()
+                    row = conn().execute(sql, (sid,)).fetchone()
+                    vids = [v for v in (row[7] or "").split(",") if v] if row else vids
             if not row:
                 return self._send(404, {"ok": False, "error": "not_found"})
-            return self._send(200, {"ok": True, "series": {
-                "id": row["sid"], "title": row["title"], "cover": row["cover"],
-                "intro": row["intro"], "eps": row["eps"] or len(vids),
-                "tags": [t for t in (row["tags"] or "").split(",") if t],
-            }, "episodes": [{"index": i + 1, "vid": v} for i, v in enumerate(vids)]})
+            series = catalog.series_json(row)
+            series["eps"] = series["eps"] or len(vids)
+            return self._send(200, {"ok": True, "series": series,
+                                    "episodes": [{"index": i + 1, "vid": v}
+                                                 for i, v in enumerate(vids)]})
 
         if p == "/api/tracks":
             vid = (qs.get("vid") or [""])[0].strip()
@@ -467,11 +478,39 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, {"ok": bool(best), "best": best,
                                     "tracks": tracks, "diag": diag})
 
-        if p == "/api/media":
-            src = (qs.get("u") or [""])[0]
-            if not src.startswith(("http://", "https://")):
-                return self._send(400, {"ok": False, "error": "bad_url"})
-            return self._proxy_media(src)
+        # ---- 目录层: 客户端原本读内置 index.bin.z, 现在全部走这里
+        if p == "/api/tags":
+            lim = _clamp_int(qs.get("limit"), catalog.TAG_BUCKETS_MAX,
+                             1, catalog.TAG_BUCKETS_MAX)
+            items = catalog.tag_buckets(conn(), lim)
+            return self._send(200, {"ok": True, "count": len(items), "items": items})
+
+        if p == "/api/tag":
+            tag = (qs.get("tag") or [""])[0].strip()
+            if not tag:
+                return self._send(400, {"ok": False, "error": "tag_required"})
+            off, lim = _page(qs)
+            r = catalog.tag_page(conn(), tag, offset=off, limit=lim)
+            return self._send(200, {"ok": True, **r})
+
+        if p == "/api/newest":
+            off, lim = _page(qs)
+            r = catalog.newest(conn(), offset=off, limit=lim)
+            return self._send(200, {"ok": True, **r})
+
+        if p == "/api/random":
+            lim = _clamp_int(qs.get("limit"), 20, 1, catalog.MAX_LIMIT)
+            skip = [x for x in (qs.get("exclude") or [""])[0].split(",") if x]
+            return self._send(200, {"ok": True,
+                                    "items": catalog.random_series(conn(), lim, skip)})
+
+        if p == "/api/series":
+            ids = [x for x in (qs.get("ids") or [""])[0].split(",") if x.strip()]
+            if not ids:
+                return self._send(400, {"ok": False, "error": "ids_required"})
+            if len(ids) > 200:
+                return self._send(400, {"ok": False, "error": "too_many_ids"})
+            return self._send(200, {"ok": True, "items": catalog.by_ids(conn(), ids)})
 
         return self._send(404, {"ok": False, "error": "not_found"})
 
@@ -541,37 +580,7 @@ class Handler(BaseHTTPRequestHandler):
         except ValueError:
             return self._send(502, {"ok": False, "error": "upstream_bad_json"})
 
-    # ---------------------------------------------------- 媒体转发
-    def _proxy_media(self, src):
-        rng = self.headers.get("range")
-        h = {"User-Agent": UA, "Referer": SITE + "/"}
-        if rng:
-            h["Range"] = rng
-        req = urllib.request.Request(src, headers=h)
-        try:
-            r = urllib.request.urlopen(req, timeout=30)
-        except urllib.error.HTTPError as e:
-            return self._send(e.code, {"ok": False, "error": f"upstream_{e.code}"})
-        except Exception as e:  # noqa: BLE001
-            return self._send(502, {"ok": False, "error": "fetch_failed",
-                                    "detail": repr(e)[:120]})
-        with r:
-            self.send_response(r.status)
-            self.send_header("content-type", r.headers.get("content-type") or "video/mp4")
-            for k in ("content-length", "content-range", "accept-ranges"):
-                v = r.headers.get(k)
-                if v:
-                    self.send_header(k, v)
-            self.send_header("cache-control", "public, max-age=3600")
-            self.end_headers()
-            try:
-                while True:
-                    chunk = r.read(256 * 1024)
-                    if not chunk:
-                        break
-                    self.wfile.write(chunk)
-            except (BrokenPipeError, ConnectionResetError):
-                pass
+    # 媒体不经过服务端: 客户端拿 /api/tracks 给的地址自己拉流并解密。
 
 
 def main():
@@ -581,6 +590,10 @@ def main():
             seed_from_legacy()
         except Exception as e:  # noqa: BLE001
             print(f"[seed] 失败 {e!r}", flush=True)
+    try:
+        rebuild_catalog_index()
+    except Exception as e:  # noqa: BLE001
+        print(f"[catalog] 标签倒排重建失败 {e!r}", flush=True)
     port = int(os.environ.get("PORT", "8787"))
     if REFRESH_SEC > 0:
         threading.Thread(target=refresh_loop, daemon=True).start()
@@ -594,7 +607,8 @@ if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "seed":
         conn()
         seed_from_legacy()
-        print("seeded", count_series())
+        rebuild_catalog_index()
+        print("seeded", count_series(), "tags", catalog.tag_count(conn()))
     elif len(sys.argv) > 1 and sys.argv[1] == "refresh":
         conn()
         refresh()
