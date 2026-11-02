@@ -217,7 +217,9 @@ final class CrashHardeningTests: XCTestCase {
         var seen = Set<String>()
         var offset = 0
         for _ in 0..<5 {
-            let r = try awaitBlock { await CatalogAPI.newest(offset: offset, limit: 50) }
+            // 闭包是 @Sendable 的，不能直接引用会被改写的 offset，先拷一份
+            let from = offset
+            let r = try awaitBlock { await CatalogAPI.newest(offset: from, limit: 50) }
             XCTAssertEqual(r.items.count, 50, "每批应取满 50 条")
             for s in r.items {
                 XCTAssertTrue(seen.insert(s.id).inserted, "跨批重复：\(s.id)")
@@ -232,7 +234,9 @@ final class CrashHardeningTests: XCTestCase {
         _ = try requireCatalog()
         var seen = Set<String>()
         for _ in 0..<3 {
-            let got = try awaitBlock { await CatalogAPI.random(limit: 40, excluding: seen) }
+            // 同上：seen 每轮都在长，交给闭包的只能是当时的快照
+            let skip = seen
+            let got = try awaitBlock { await CatalogAPI.random(limit: 40, excluding: skip) }
             XCTAssertFalse(got.isEmpty, "excluding 之后抽不出来了")
             for s in got {
                 XCTAssertTrue(seen.insert(s.id).inserted, "跨轮重复：\(s.id)")
