@@ -5,7 +5,7 @@ set -eu
 
 JAR=/app/sign/unidbg-sign.jar
 LOG=/tmp/signer.log
-PORT=""
+SIGNER_LISTEN=""
 
 if [ -f "$JAR" ]; then
   ( cd /app/sign && exec java \
@@ -29,21 +29,21 @@ if [ -f "$JAR" ]; then
 
   i=0
   while [ "$i" -lt 120 ]; do
-    PORT=$(ss -ltnp 2>/dev/null | awk -v p="$JPID" 'index($0, "pid=" p ",") {print $4}' \
+    SIGNER_LISTEN=$(ss -ltnp 2>/dev/null | awk -v p="$JPID" 'index($0, "pid=" p ",") {print $4}' \
            | sed 's/.*://' | head -1)
-    [ -n "${PORT:-}" ] && break
+    [ -n "${SIGNER_LISTEN:-}" ] && break
     if ! kill -0 "$JPID" 2>/dev/null; then
       echo "[entry] signer 已退出, 末尾日志:"
       tail -20 "$LOG" || true
-      PORT=""
+      SIGNER_LISTEN=""
       break
     fi
     i=$((i + 1))
     sleep 1
   done
 
-  if [ -n "${PORT:-}" ] && [ "$PORT" != "0" ]; then
-    export SIGNER_URL="http://127.0.0.1:$PORT"
+  if [ -n "${SIGNER_LISTEN:-}" ] && [ "$SIGNER_LISTEN" != "0" ]; then
+    export SIGNER_URL="http://127.0.0.1:$SIGNER_LISTEN"
     echo "[entry] signer 就绪 $SIGNER_URL"
   else
     echo "[entry] 未拿到签名端口, /resolve 将无签名直连"

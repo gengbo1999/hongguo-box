@@ -594,7 +594,11 @@ def main():
         rebuild_catalog_index()
     except Exception as e:  # noqa: BLE001
         print(f"[catalog] 标签倒排重建失败 {e!r}", flush=True)
-    port = int(os.environ.get("PORT", "8787"))
+    # PORT 可能是空串(环境里显式给了空值), int("") 会直接把进程带走, 兜回默认端口
+    try:
+        port = int((os.environ.get("PORT") or "").strip() or "8787")
+    except ValueError:
+        port = 8787
     if REFRESH_SEC > 0:
         threading.Thread(target=refresh_loop, daemon=True).start()
         print(f"[crawl] 每 {REFRESH_SEC}s 刷新一次", flush=True)
