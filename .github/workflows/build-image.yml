@@ -25,6 +25,9 @@ jobs:
       tag: ${{ steps.meta.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          # 种子索引要从历史提交 4e4e266^ 里取，浅克隆拿不到
+          fetch-depth: 0
 
       - name: 解析镜像标签
         id: meta
