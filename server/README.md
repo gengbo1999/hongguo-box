@@ -87,9 +87,17 @@ git show 4e4e266^:ShortDramaBox/Sources/Resources/index.bin.z > server/seed/inde
 kubectl apply -f server/k8s.yaml
 kubectl -n dev get ingress hongguo     # hongguo.gengbo.top
 
-# 之后靠 CI
-git tag v1.0.31 && git push origin v1.0.31
+# 之后靠 CI：本地手推一个 v* 标签（build-image.yml 只认 tag push）
+git tag v1.0.30 && git push origin v1.0.30
 ```
+
+注意两点：
+
+- `build-ipa.yml` 自己也会打 `v*` 标签，但用 `GITHUB_TOKEN` 推的标签**不会再触发**别的
+  workflow，所以发版还得本地手推。它同时只保留最新一个 release/tag，别指望旧标签一直在。
+- 种子索引 `server/seed/index.bin.z` 被 `.gitignore` 排除，CI 里由 `取种子索引` 那步从
+  历史提交 `4e4e266^` 取回（checkout 要用全量 clone）。漏了这步镜像就是空库，
+  起来 `/healthz` 会报 `series:0`。
 
 TLS 用 cert-manager 的 `letsencrypt-prod` 自动签发（集群里已有的 ClusterIssuer）。
 想复用 `*.gengbo.top` 通配证书就删掉注解、把 secretName 改成 `gengbo-wildcard-tls`。
