@@ -13,16 +13,25 @@ import Foundation
 /// 不用重新打包、不用让用户重新侧载。
 ///
 /// 安全设计：
-///   - 默认关闭，地址必须显式配置（UserDefaults 的 `resolver_base`）；
+///   - 默认指向官方服务器 `defaultBase`，开箱即用；
+///   - 填 `resolver_base` 可以换地址（自建），填空串则整体关掉远端；
 ///   - 超时 8 秒，比本地直连的 20 秒短，失败时能及时回退；
 ///   - 任何一步失败都静默返回 nil，调用方自然回退本地直连。
 /// 所以打开它不会让现状变差。
 enum RemoteResolver {
 
-    /// 服务地址，例如 "http://1.2.3.4:30087"。为空表示不启用。
+    /// 官方服务地址。目录层和取流都走它，用户不用配。
+    /// 服务端在 `hongguo-box/server/`，k8s 上的 `hongguo.gengbo.top`。
+    static let defaultBase = "https://hongguo.gengbo.top"
+
+    /// 服务地址。默认就是官方服务器；
+    /// UserDefaults 里显式填了 `resolver_base` 就用填的（自建/调试），
+    /// 填成空串等于关掉远端，全部走本地直连。
     static var base: String? {
-        let v = (UserDefaults.standard.string(forKey: "resolver_base") ?? "")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let raw = UserDefaults.standard.string(forKey: "resolver_base") else {
+            return defaultBase
+        }
+        let v = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         return v.isEmpty ? nil : v
     }
 
