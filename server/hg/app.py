@@ -541,6 +541,75 @@ class Handler(BaseHTTPRequestHandler):
         return self._send(404, {"ok": False, "error": "not_found"})
 
     # ---------------------------------------------------- 上游代理
+    @staticmethod
+    def _wanted_vids(payload):
+        """尽力从上游请求体/查询串里取出本次查询的 vid。"""
+        ids = []
+        if not isinstance(payload, dict):
+            return ids
+        for key in ("video_id", "vid"):
+            v = payload.get(key)
+            if isinstance(v, (str, int)) and str(v):
+                ids.append(str(v))
+        m = payload.get("mixed_video_id_map")
+        if isinstance(m, dict):
+            for lst in m.values():
+                if isinstance(lst, list):
+                    ids.extend(str(x) for x in lst if x)
+        return ids
+
+    @staticmethod
+    def _as_video_model(v):
+        """video_model 可能是 dict, 也可能是 JSON 字符串; 统一成 dict。"""
+        if isinstance(v, dict):
+            return v
+        if isinstance(v, str) and v.lstrip().startswith("{"):
+            try:
+                d = json.loads(v)
+            except ValueError:
+                return None
+            return d if isinstance(d, dict) else None
+        return None
+
+    def _find_video_model(self, obj, prefer, depth=0):
+        if depth > 3 or not isinstance(obj, dict):
+            return None
+        hit = self._as_video_model(obj.get("video_model"))
+        if hit is not None:
+            return hit
+        children = {k: v for k, v in obj.items() if isinstance(v, dict)}
+        for vid in prefer:  # 先按请求里点名的 vid 找
+            if vid in children:
+                hit = self._find_video_model(children[vid], prefer, depth + 1)
+                if hit is not None:
+                    return hit
+        for v in children.values():
+            hit = self._find_video_model(v, prefer, depth + 1)
+            if hit is not None:
+                return hit
+        return None
+
+    def _normalize_video_model(self, got, payload=None):
+        """把上游埋在 `data.<vid>.video_model` 里的内容提到顶层。
+
+        客户端 RemoteResolver.parseTracks 只认顶层 video_model(dict) 或
+        video_list(list); 而上游 multi_video_model 把它们编码成 JSON 字符串
+        塞在 `data.<vid>.video_model` 里, 导致网关路径解析不到任何档位。
+        这里只做加法: 原有字段一律不动, 额外补 video_model / video_list。
+        """
+        if not isinstance(got, dict):
+            return got
+        if isinstance(got.get("video_model"), dict) or isinstance(got.get("video_list"), list):
+            return got  # 已经是客户端能吃的形状
+        model = self._find_video_model(got, self._wanted_vids(payload))
+        if model is None:
+            return got
+        out = dict(got)
+        out["video_model"] = model
+        vl = model.get("video_list")
+        out["video_list"] = vl if isinstance(vl, list) else []
+        return out
+
     def _resolve(self, body):
         """兼容客户端 RemoteResolver: 客户端给 host/path/method/body, 服务端签名后转发。"""
         host = str(body.get("host") or "").strip().rstrip("/")
@@ -568,13 +637,9 @@ class Handler(BaseHTTPRequestHandler):
                 with urllib.request.urlopen(req, timeout=20) as r:
                     raw = r.read()
             else:
-                data = json.dumps(payload if payload is not None else {},
-                                  ensure_ascii=False, separators=(",", ":")).encode()
-                extra = dict(query)
-                if "video_platform" in (payload or {}).get("biz_param", {}):
-                    pass
                 got = upstream.post(path, payload if payload is not None else {},
-                                    extra_query=extra, host=host)
+                                    extra_query=dict(query), host=host)
+                got = self._normalize_video_model(got, payload)
                 return self._send(200, {"ok": True, "data": got})
         except upstream.UpstreamError as e:
             return self._send(502, {"ok": False, "error": e.code, "detail": e.detail})
@@ -585,7 +650,8 @@ class Handler(BaseHTTPRequestHandler):
         if not raw:
             return self._send(502, {"ok": False, "error": "upstream_empty"})
         try:
-            return self._send(200, {"ok": True, "data": json.loads(raw.decode())})
+            got = self._normalize_video_model(json.loads(raw.decode()), query)
+            return self._send(200, {"ok": True, "data": got})
         except ValueError:
             return self._send(502, {"ok": False, "error": "upstream_bad_json"})
 
