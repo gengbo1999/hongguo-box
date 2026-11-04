@@ -179,7 +179,7 @@ struct ChannelGridView: View {
 ///
 /// 原来这里是「频道」（真人剧 / 漫剧 / AI剧），但那和首页那几行是同一批数据、
 /// 只是换个排版，等于没有分类价值。改成按标签浏览：服务端目录层维护全库
-/// 58.8 万部的标签倒排（378 个），翻页是一次索引切片，这里只管连翻。
+/// 站方全库的标签倒排（现在 400 个出头，会慢慢长），翻页是一次索引切片，这里只管连翻。
 struct BrowseView: View {
     @State private var buckets: [CatalogAPI.TagBucket] = []
     @State private var tag: String?

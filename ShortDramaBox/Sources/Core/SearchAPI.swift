@@ -1,7 +1,11 @@
 import Foundation
 
-/// 站内搜索：`/search/<关键词>` 是服务端渲染路由，一次返回站方按相关度排序的前 10 条 + 命中总数。
-/// 不需要签名，也不依赖本地索引，因此能搜到本地索引里没有的剧（含同名各季）。
+/// 站内搜索：抓 `https://hongguoduanju.com/search/<关键词>`，从页面内嵌的
+/// `_ROUTER_DATA` 里取「按相关度排序的前若干条 + 命中总数」。
+///
+/// ⚠️ 现状：站方已把搜索页改成前端渲染，页面上不再有 `_ROUTER_DATA`，
+/// 这条链路基本抓不到数据（`routerJSON` 返回 nil → 抛 `ApiError.noData`）。
+/// 保留它是为了站方万一改回去；调用方必须容忍失败，不能把结果当唯一来源。
 enum SearchAPI {
     struct Page {
         var list: [Series] = []

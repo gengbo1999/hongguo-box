@@ -18,7 +18,8 @@ server/
 索引不再打包进 App。服务端第一次启动时读 `index.bin.z` 导入 SQLite：
 
 - 老格式（`u64 rawSize` + **raw deflate**，体是 `DJIX`）由 `app.load_legacy_index` 解析
-- 实测：**588,787 条**，导入 **7.9 秒**；紧接着建标签倒排 **4.0 秒**（整轮 `app.py seed` 12 秒）
+- 首批导入：**588,787 条**，导入 **7.9 秒**；紧接着建标签倒排 **4.0 秒**（整轮 `app.py seed` 12 秒）。
+  之后跟着站点持续新增，现在库里是 58.9 万条上下（`/healthz` 的 `series` 是准数）
 - 搜索实测（首次查询冷缓存，含 `COUNT(*)`）：`神医` 1183 命中 300ms / `总裁` 2741 命中 40ms
   / `复仇` 500 命中 40ms；翻页本身 2~10ms
 - 目录接口实测：`/api/tag` 7ms、`/api/newest` 3ms、`/api/random` 5ms、
@@ -76,7 +77,8 @@ git show 4e4e266^:ShortDramaBox/Sources/Resources/index.bin.z > server/seed/inde
 
 标签云走倒排表，不在请求时扫全表：`tag(tid,name)` +
 `series_tag(tid,sid,created)`（`WITHOUT ROWID`，索引 `(tid, created DESC, sid DESC)`）。
-全量建一次实测约 **4 秒**（588,787 行、1,917,960 条倒排、378 个标签），之后靠
+全量建一次实测约 **4 秒**（首批 588,787 行、1,917,960 条倒排、378 个标签；标签数会随站点增长，
+现在 400 个出头），之后靠
 `meta.tag_index_sig = COUNT(*):MAX(updated)` 判断是否过期，只在导入/刷新改过库时重建；
 重建用独立连接，避免和请求线程抢一条连接。
 

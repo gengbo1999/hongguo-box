@@ -15,7 +15,7 @@ enum CatalogAPI {
 
     /// 与服务端一致的默认分页大小。
     static let defaultPageLimit = 24
-    /// 标签云一次要全量（服务端上限 1000，实际只有 378 个）。
+    /// 标签云一次要全量（服务端上限 1000，实际 400 个出头）。
     static let maxTagBuckets = 1000
 
     static var isEnabled: Bool { RemoteResolver.base != nil }

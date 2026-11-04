@@ -7,6 +7,28 @@ import UIKit
 
 // MARK: - 单条推荐
 
+/// 推荐流里的两种片子，也是卡片左上角那枚标签。页面上只有这两种。
+enum FeedKind: String, CaseIterable {
+    /// 新剧：服务端全库「最新上架在前」，占七成
+    case new = "新剧"
+    /// 爆剧：首页板块 + 频道首页的站方推荐位，占三成
+    case hot = "爆剧"
+
+    var icon: String {
+        switch self {
+        case .new: return "sparkles"
+        case .hot: return "flame.fill"
+        }
+    }
+
+    var tint: Color {
+        switch self {
+        case .new: return .pink
+        case .hot: return .orange
+        }
+    }
+}
+
 struct FeedItem: Identifiable {
     enum Status: Equatable {
         case pending              // 还没开始解析
@@ -17,6 +39,8 @@ struct FeedItem: Identifiable {
     }
 
     var series: Series
+    /// 这部剧是从哪个池子来的（新剧 / 爆剧），卡片上照着它打标签
+    var kind: FeedKind = .new
     var episode: Episode?
     /// 解析时顺手存下的全集列表，点画面时直接起播，不用再请求一次
     var episodes: [Episode] = []
@@ -176,34 +200,29 @@ enum VideoFit {
     static func next(_ mode: Int) -> Int { (mode + 1) % 3 }
 }
 
-// MARK: - 推荐流数据
-
-
 // MARK: - 推荐流混合配方
 
-/// 推荐流的混合配方：**爆剧 : 新剧 = 7 : 3**，「其他剧」（服务端全库随机）占三成。
+/// 推荐流的混合配方：**新剧 : 爆剧 = 7 : 3**，页面上只有这两种，每个卡片都带标签。
 ///
-/// 想更偏爆剧就把 `hotWeight` 调大，想多看新剧就调大 `newWeight`，
-/// 想多刷到冷门老剧就调大 `otherShare` —— 只改这三个数，别的都不用动。
+/// 新剧来自服务端全库「最新在前」，池子用不完；爆剧是首页板块 + 频道首页的
+/// 站方推荐位，池子有限。爆剧抽完之后缺额**全部并给新剧**——宁可多给新剧，
+/// 也不拿冷门老剧凑数。
+///
+/// 想调整比例只改这两个权重，别的都不用动。
 enum FeedMix {
-    /// 爆剧（首页板块 + 频道首页的站方推荐位）
-    static let hotWeight = 7
     /// 新剧（服务端全库「最新在前」）
-    static let newWeight = 3
-    /// 其他剧（服务端全库随机）在每一批里占的比例
-    static let otherShare = 0.30
+    static let newWeight = 7
+    /// 爆剧（首页板块 + 频道首页的站方推荐位）
+    static let hotWeight = 3
     /// 每批条数（首批 + 每次续抽）
     static let batchSize = 240
 
-    /// 算一批的配额。爆剧池是有限的（首页 + 频道首页就那么多），
-    /// 抽完之后缺额自动让给新剧；新剧也不够时由调用方再让给其他剧。
-    static func plan(hotAvailable: Int, batchSize: Int = FeedMix.batchSize) -> (hot: Int, new: Int, other: Int) {
-        guard batchSize > 0 else { return (0, 0, 0) }
-        let other = Int((Double(batchSize) * otherShare).rounded())
-        let priority = max(0, batchSize - other)
-        let hotIdeal = priority * hotWeight / (hotWeight + newWeight)
+    /// 算一批的配额。爆剧池不够时缺额让给新剧，每批条数保持 `batchSize`。
+    static func plan(hotAvailable: Int, batchSize: Int = FeedMix.batchSize) -> (new: Int, hot: Int) {
+        guard batchSize > 0 else { return (0, 0) }
+        let hotIdeal = batchSize * hotWeight / (newWeight + hotWeight)
         let hot = min(hotIdeal, max(0, hotAvailable))
-        return (hot, priority - hot, other)
+        return (batchSize - hot, hot)
     }
 }
 
@@ -242,13 +261,12 @@ final class FeedModel: ObservableObject {
     private var currentIndex = 0
     private let prefetchAhead = 1
 
-    /// 推荐池：**爆剧 : 新剧 = 7 : 3**，再加约三成从服务端全库（58.8 万条）随机
-    /// 抽的「其他剧」；全部按 id 去重后整批打乱。
+    /// 推荐池：**新剧 : 爆剧 = 7 : 3**，只从这两个池子取；全部按 id 去重后整批打乱。
     func load() async {
         loading = true; error = nil
         hotCursor = 0; newCursor = 0; seenIDs.removeAll()
 
-        // 爆剧池 = 首页板块 + 各频道第 1 页（站方推荐位）。网络挂了也不影响后面的本地池。
+        // 爆剧池 = 首页板块 + 各频道第 1 页（站方推荐位）。网络挂了也不影响新剧池。
         var hot: [Series] = []
         if let secs = try? await Catalog.home() { hot = secs.flatMap { $0.items } }
         if hot.count < 40 {
@@ -266,10 +284,10 @@ final class FeedModel: ObservableObject {
         var batch = await nextBatch()
         if batch.isEmpty && sampleTotal == 0 {
             // 服务端不可用时兜底：至少把爆剧池打乱放出去
-            batch = hotPool.shuffled().map { FeedItem(series: $0) }
-            poolNote = "首页推荐 \(batch.count) 部，随机播放"
+            batch = hotPool.shuffled().map { FeedItem(series: $0, kind: .hot) }
+            poolNote = "站方推荐 \(batch.count) 部，随机播放"
         } else {
-            poolNote = "爆剧 \(hotPool.count) 部 · 全库 \(sampleTotal) 部 · 7:3 混合随机"
+            poolNote = "新剧 7 : 爆剧 3 · 全库 \(sampleTotal) 部"
         }
         guard !batch.isEmpty else {
             error = "没有拿到推荐内容，检查下网络"
@@ -280,44 +298,40 @@ final class FeedModel: ObservableObject {
         loading = false
     }
 
-    /// 组一批：按 `FeedMix.plan` 的配额从三个池子取，全局去重后打乱。
-    /// 爆剧池抽完之后，缺额自动流向新剧；新剧不够再流向「其他剧」。
+    /// 组一批：按 `FeedMix.plan` 的配额取新剧和爆剧，全局去重后打乱。
+    /// 爆剧池有限，抽完（或不够）的缺额自动并给新剧，每批条数仍是 240。
     private func nextBatch() async -> [FeedItem] {
         let plan = FeedMix.plan(hotAvailable: max(0, hotPool.count - hotCursor))
-        var picked: [Series] = []
+        var picked: [FeedItem] = []
 
-        // 1) 爆剧（有限池，抽完为止）
-        let hotTake = min(plan.hot, max(0, hotPool.count - hotCursor))
-        if hotTake > 0 {
-            picked += hotPool[hotCursor..<(hotCursor + hotTake)]
-            hotCursor += hotTake
+        // 1) 爆剧：有限池，抽完为止
+        var hotTaken = 0
+        while hotTaken < plan.hot, hotCursor < hotPool.count {
+            let s = hotPool[hotCursor]
+            hotCursor += 1
+            guard seenIDs.insert(s.id).inserted else { continue }
+            picked.append(FeedItem(series: s, kind: .hot))
+            hotTaken += 1
         }
 
-        // 2) 新剧：把爆剧的缺额一起要过来
-        let newWant = plan.new + (plan.hot - hotTake)
-        let newOffset = newCursor
-        var newGot = 0
-        if newWant > 0 {
-            let r = await CatalogAPI.newest(offset: newOffset, limit: newWant)
-            newCursor = r.next
-            picked += r.items
-            newGot = r.items.count
+        // 2) 新剧：全库「最新在前」，把这一批补满（含爆剧的缺额）。
+        // 服务端单页最多 100 条，240 条要分几轮拿；遇到重复就多要一轮。
+        var want = FeedMix.batchSize - picked.count
+        var rounds = 0
+        while want > 0, rounds < 6 {
+            rounds += 1
+            let page = await CatalogAPI.newest(offset: newCursor, limit: min(want, 100))
+            guard !page.items.isEmpty else { break }
+            newCursor = page.next
+            for s in page.items {
+                guard seenIDs.insert(s.id).inserted else { continue }
+                picked.append(FeedItem(series: s, kind: .new))
+                want -= 1
+                if want == 0 { break }
+            }
         }
 
-        // 3) 其他剧：全库均匀随机，含新剧的缺额
-        let otherWant = plan.other + (newWant - newGot)
-        if otherWant > 0 {
-            let excl = seenIDs.union(picked.map(\.id))
-            picked += await CatalogAPI.random(limit: otherWant, excluding: excl)
-        }
-
-        // 4) 全局去重 + 整批打乱
-        var out: [FeedItem] = []
-        out.reserveCapacity(picked.count)
-        for s in picked.shuffled() where seenIDs.insert(s.id).inserted {
-            out.append(FeedItem(series: s))
-        }
-        return out
+        return picked.shuffled()
     }
 
     /// 把离当前位置太远的待办丢掉，避免滑太久后一堆任务堆积
@@ -328,7 +342,7 @@ final class FeedModel: ObservableObject {
         for k in index...(index + prefetchAhead) where items.indices.contains(k) {
             prepareOne(k)
         }
-        // 快滑到底了就再抽一批补上，保证「全库随机」能一直滑下去。
+        // 快滑到底了就再抽一批补上，新剧游标一直往下走，能无限滑。
         // 总量封顶 itemCap：推荐流常驻内存始终是几百条，不随库大小膨胀。
         if index > items.count - 6, items.count < Self.itemCap, sampleTotal > items.count {
             appendSample()
@@ -577,23 +591,24 @@ private struct FeedCard: View {
                 .contentShape(Rectangle())
                 .onTapGesture { onPlay() }
 
-            // 清晰度角标（取流被拒答降级时前面挂 ⚠️，点进播放页可看原因）
-            if let t = item.track, player != nil {
-                VStack {
-                    HStack {
+            // 左上角：种类标签（新剧 / 爆剧）+ 清晰度角标
+            VStack {
+                HStack(spacing: 6) {
+                    kindBadge
+                    if let t = item.track, player != nil {
                         Text((t.note.isEmpty ? "" : "⚠️ ") + "\(t.definition) · \(t.codec)")
                             .font(.system(size: 11, weight: .medium))
                             .foregroundStyle(.white)
                             .padding(.horizontal, 8).padding(.vertical, 4)
                             .background(.black.opacity(0.45))
                             .clipShape(Capsule())
-                        Spacer()
                     }
                     Spacer()
                 }
-                .padding(.leading, 14).padding(.top, 8)
-                .allowsHitTesting(false)
+                Spacer()
             }
+            .padding(.leading, 14).padding(.top, 8)
+            .allowsHitTesting(false)
 
             // 右侧操作栏
             VStack(spacing: 20) {
@@ -666,6 +681,21 @@ private struct FeedCard: View {
         }
         .onAppear { if isActive { start() } }
         .onDisappear { teardown() }
+    }
+
+    /// 左上角的种类标签：新剧 / 爆剧。每张卡片都挂，比例一眼能看出来。
+    private var kindBadge: some View {
+        HStack(spacing: 3) {
+            Image(systemName: item.kind.icon)
+                .font(.system(size: 9, weight: .bold))
+            Text(item.kind.rawValue)
+                .font(.system(size: 11, weight: .semibold))
+        }
+        .foregroundStyle(.white)
+        .padding(.horizontal, 8).padding(.vertical, 4)
+        .background(item.kind.tint.opacity(0.92))
+        .clipShape(Capsule())
+        .shadow(color: .black.opacity(0.25), radius: 3, y: 1)
     }
 
     private func sideIcon(_ name: String, _ label: String, color: Color = .white) -> some View {

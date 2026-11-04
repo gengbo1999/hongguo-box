@@ -1,12 +1,15 @@
 import SwiftUI
 
-/// 搜索 = 服务端全库（约 58.8 万部）＋ 站内服务端搜索（按站方相关度排序）。
+/// 搜索 = 服务端全库（片名包含匹配）＋ 站内搜索（拿得到就并进来）。
 ///
-/// 为什么要两份：站内搜索只覆盖它自己的索引，实测拿全库随机片名去搜，
-/// 精确命中率只有约 50%（冷门老剧基本搜不到）；我们的全库覆盖 99.96%，
-/// 但它是"片名包含"匹配，没有站方的相关度。两者合并去重才既不漏又好找。
+/// 全库这份是我们自己的：服务端索引了站方全部剧集，按片名做包含匹配，
+/// 冷门老剧也搜得到；代价是只认片名，tag、简介、演员都不参与。
 ///
-/// 同名各季是独立剧集（标题带「第N季」），两边都会把它们一起返回。
+/// 站内那份按站方相关度排序，本来算个补充，但现在站方把搜索页改成前端渲染，
+/// 客户端拿不到它返回的数据了 —— 所以只当可选补充，失败就静默降级，
+/// 界面上提一句「站内暂时拿不到」，全库结果照旧。
+///
+/// 同名各季是独立剧集（标题带「第N季」），会一起返回。
 struct SearchView: View {
     @State private var q = ""
 
@@ -79,8 +82,8 @@ struct SearchView: View {
                 CompatUnavailable(
                     "搜索短剧", systemImage: "magnifyingglass",
                     desc: indexReady
-                        ? "输入片名，在 \(indexCount) 部里搜索\n同时也会去站内再找一遍"
-                        : "输入片名搜索站内\n（没配服务端地址，全库不可用）")
+                        ? "输入片名，在 \(indexCount) 部里搜索\n按片名包含匹配，冷门老剧也找得到"
+                        : "服务端暂时连不上\n全库搜索需要它，检查下网络再试")
             }
         }
     }
@@ -88,7 +91,9 @@ struct SearchView: View {
     private var searchingState: some View {
         VStack(spacing: 10) {
             if remoteBusy || localTask != nil { ProgressView() }
-            Text(remoteBusy || localTask != nil ? "正在搜索…" : "没有找到「\(keyword)」")
+            Text(remoteBusy || localTask != nil
+                 ? "正在搜索…"
+                 : "没有找到「\(keyword)」\n换个片名试试")
                 .font(.system(size: 12)).foregroundStyle(.secondary)
                 .multilineTextAlignment(.center).padding(.horizontal)
         }
@@ -111,7 +116,7 @@ struct SearchView: View {
             parts.append("全库命中 \(localTotal) 部")
             if local.count < localTotal { parts.append("显示前 \(local.count) 部") }
         }
-        if remoteTotal > 0 { parts.append("站内命中 \(remoteTotal) 部") }
+        if remoteTotal > 0 { parts.append("站内另有 \(remoteTotal) 部") }
         if parts.isEmpty { return remoteBusy ? "正在搜索…" : "没有找到" }
         return parts.joined(separator: " · ")
     }
@@ -152,14 +157,14 @@ struct SearchView: View {
             } catch {
                 guard !Task.isCancelled, key == keyword else { return }
                 remote = []; remoteTotal = 0
-                remoteNote = "站内搜索没通，只用了全库索引"
+                remoteNote = "站内结果暂时拿不到，先看全库"
             }
             remoteBusy = false
         }
     }
 
     /// 进页面时先问一下服务端全库有多少条，用来显示「在 N 部里搜」。
-    /// 拿不到就当作没有全库（0），这时只搜站内。
+    /// 拿不到（多半是服务端没起来/网络不通）就按 0 展示，搜索本身仍会试一次。
     private func warmUp() async {
         let n = await CatalogAPI.totalCount()
         indexCount = n

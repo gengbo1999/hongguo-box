@@ -211,7 +211,7 @@ final class IndexTests: XCTestCase {
         return box.get() ?? [:]
     }
 
-    // MARK: - 推荐流取样（爆剧 / 新剧 / 其他剧）
+    // MARK: - 推荐流取样（新剧 / 爆剧）
 
     func testNewestAdvancesWithoutOverlap() throws {
         let r1 = try onServer { await CatalogAPI.newest(offset: 0, limit: 20) }
@@ -251,20 +251,32 @@ final class IndexTests: XCTestCase {
 
     func testFeedMixWeightsAreSevenToThree() {
         let p = FeedMix.plan(hotAvailable: 999, batchSize: 240)
-        XCTAssertEqual(p.hot + p.new + p.other, 240, "配额加起来不等于每批条数")
-        XCTAssertEqual(p.other, 72, "其他剧该占三成（72/240）")
-        XCTAssertEqual(p.hot, 117, "爆剧该是优先池的十分之七")
-        XCTAssertEqual(p.new, 51, "新剧该是优先池的十分之三")
+        XCTAssertEqual(p.new + p.hot, 240, "配额加起来不等于每批条数")
+        XCTAssertEqual(p.new, 168, "新剧该占七成（168/240）")
+        XCTAssertEqual(p.hot, 72, "爆剧该占三成（72/240）")
+        XCTAssertEqual(FeedMix.newWeight, 7)
+        XCTAssertEqual(FeedMix.hotWeight, 3)
+        XCTAssertEqual(p.new * FeedMix.hotWeight, p.hot * FeedMix.newWeight,
+                       "新剧:爆剧 不是 7:3")
     }
 
     func testFeedMixGivesHotShortfallToNew() {
         let none = FeedMix.plan(hotAvailable: 0, batchSize: 240)
         XCTAssertEqual(none.hot, 0)
-        XCTAssertEqual(none.new, 168, "爆剧池空了，缺额应该全给新剧")
-        XCTAssertEqual(none.other, 72)
+        XCTAssertEqual(none.new, 240, "爆剧池空了，缺额应该全给新剧")
         let few = FeedMix.plan(hotAvailable: 10, batchSize: 240)
         XCTAssertEqual(few.hot, 10, "爆剧不够就按实际给，不超发")
-        XCTAssertEqual(few.new, 158)
+        XCTAssertEqual(few.new, 230)
+        XCTAssertEqual(few.new + few.hot, 240)
+        let empty = FeedMix.plan(hotAvailable: 999, batchSize: 0)
+        XCTAssertEqual(empty.new, 0)
+        XCTAssertEqual(empty.hot, 0)
+    }
+
+    func testFeedKindHasExactlyTwoCases() {
+        XCTAssertEqual(FeedKind.allCases.count, 2, "推荐页只放新剧和爆剧")
+        XCTAssertEqual(FeedKind.new.rawValue, "新剧")
+        XCTAssertEqual(FeedKind.hot.rawValue, "爆剧")
     }
 }
 /// 把异步结果从并发域安全带回测试线程

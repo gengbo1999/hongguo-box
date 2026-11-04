@@ -84,7 +84,9 @@ struct DetailView: View {
         }
     }
 
-    /// 同名其它季：季是独立剧集（标题带「第N季」），用站内搜索把兄弟季找出来
+    /// 同名其它季：季是独立剧集（标题带「第N季」）。
+    /// 先用站内搜索（它按站方相关度给），但站方已改成前端渲染、多半拿不到，
+    /// 所以回落到服务端全库的片名包含匹配 —— 一样能把兄弟季捞出来。
     private var otherSeasons: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("其它季（\(siblings.count)）").font(.headline).padding(.horizontal)
@@ -121,8 +123,12 @@ struct DetailView: View {
 
     private func loadSiblings() async {
         guard let base = detail.seasonBase ?? series.seasonBase else { return }
-        guard let p = try? await SearchAPI.remote(base) else { return }
-        siblings = p.list
+        var found: [Series] = []
+        if let p = try? await SearchAPI.remote(base) { found = p.list }
+        if found.isEmpty {
+            found = await CatalogAPI.search(base, limit: 60).list
+        }
+        siblings = found
             .filter { $0.id != series.id && $0.title.hasPrefix(base) }
             .sorted { ($0.seasonNumber ?? 9999) < ($1.seasonNumber ?? 9999) }
     }
