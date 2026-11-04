@@ -25,6 +25,49 @@ DEFAULT_CHANNEL = os.environ.get("HG_CHANNEL", "update_64")
 APP_VC = "72232"
 TTOK = "3.12.13.20"
 
+# ------------------------------------------------ 登录态（cookie / x-tt-token）
+# 游客访问 video_model 家族会被上游直接返回 0 字节, 必须携带真实登录态。
+# 目前只能靠环境变量 HG_COOKIE / HG_TT_TOKEN 预置; set_session() 是留给
+# 以后 /api/session 路由的入口(暂未接)。未设置时行为与之前完全一致。
+SESSION_LOCK = threading.Lock()
+SESSION = {
+    "cookie": os.environ.get("HG_COOKIE", "").strip(),
+    "tt_token": os.environ.get("HG_TT_TOKEN", "").strip(),
+}
+
+
+def set_session(cookie=None, tt_token=None):
+    """写入登录态。传 None 表示不动该字段, 传空串表示清除。"""
+    with SESSION_LOCK:
+        if cookie is not None:
+            SESSION["cookie"] = (cookie or "").strip()
+        if tt_token is not None:
+            SESSION["tt_token"] = (tt_token or "").strip()
+    return session_status()
+
+
+def session_status():
+    with SESSION_LOCK:
+        cookie = SESSION["cookie"]
+        token = SESSION["tt_token"]
+    return {
+        "cookie": bool(cookie),
+        "cookie_len": len(cookie),
+        "tt_token": bool(token),
+        "tt_token_len": len(token),
+    }
+
+
+def _apply_session(headers):
+    with SESSION_LOCK:
+        cookie = SESSION["cookie"]
+        token = SESSION["tt_token"]
+    if cookie:
+        headers["cookie"] = cookie
+    if token:
+        headers["x-tt-token"] = token
+    return headers
+
 PHONE_PROFILES = [
     {"brand": "Redmi", "model": "22041211AC", "build": "TKQ1.220807.001", "res": "1080*2400", "os": "13", "api": "33"},
     {"brand": "Redmi", "model": "23021RAA2Y", "build": "UKQ1.230804.001", "res": "1080*2400", "os": "14", "api": "34"},
@@ -185,6 +228,7 @@ def post(path, body, extra_query=None, signed=True, host=None, timeout=30):
         "accept": "application/json",
         "sdk-version": "2",
     }
+    _apply_session(headers)
     raw = json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     headers["x-ss-stub"] = hashlib.md5(raw).hexdigest().upper()
     if signed:
