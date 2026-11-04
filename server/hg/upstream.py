@@ -218,25 +218,43 @@ def _request_json(url, body, headers, timeout=30):
         raise UpstreamError("upstream_bad_json", raw[:120].decode("utf-8", "replace")) from e
 
 
-def post(path, body, extra_query=None, signed=True, host=None, timeout=30):
+def post(path, body, extra_query=None, signed=True, host=None, timeout=30, retries=2):
+    """POST 一个上游接口，并对「空响应」做有限重试。
+
+    游客态下 video_model 家族偶尔会回 HTTP 200 + 0 字节（上游桌面端 1.0.16
+    就是为此加了「最多两次延迟重试」）。这不是签名失效，重试通常就有数据。
+
+    重试时整段头重建、重新签名：X-Khronos 是时间戳，复用旧签名反而会被拒。
+    """
     host = (host or DEFAULT_HOST).rstrip("/")
     url = build_url(host, path, extra_query)
     dev = current_device()
-    headers = {
-        "user-agent": dev["user_agent"],
-        "content-type": "application/json; charset=utf-8",
-        "accept": "application/json",
-        "sdk-version": "2",
-    }
-    _apply_session(headers)
     raw = json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-    headers["x-ss-stub"] = hashlib.md5(raw).hexdigest().upper()
-    if signed:
-        got = sign(url, headers)
-        if got:
-            headers.update(got)
-    headers.pop("accept-encoding", None)
-    return _request_json(url, raw, headers, timeout=timeout)
+    stub = hashlib.md5(raw).hexdigest().upper()
+
+    last = None
+    for attempt in range(retries + 1):
+        headers = {
+            "user-agent": dev["user_agent"],
+            "content-type": "application/json; charset=utf-8",
+            "accept": "application/json",
+            "sdk-version": "2",
+            "x-ss-stub": stub,
+        }
+        _apply_session(headers)
+        if signed:
+            got = sign(url, headers)
+            if got:
+                headers.update(got)
+        headers.pop("accept-encoding", None)
+        try:
+            return _request_json(url, raw, headers, timeout=timeout)
+        except UpstreamError as e:
+            if e.code != "upstream_empty" or attempt >= retries:
+                raise
+            last = e
+        time.sleep(0.6 + attempt * 0.8)
+    raise last  # pragma: no cover - 循环内已经 raise，这里只为满足静态检查
 
 
 def video_model(vid, signed=True, host=None):
@@ -249,11 +267,20 @@ def video_model(vid, signed=True, host=None):
 
 
 def multi_video_model(vid, platform=1024, signed=True, host=None):
-    """批量取流。platform=1024 是实测能拿到 1080p 的那条路径。"""
+    """批量取流。platform=1024 是实测能拿到 1080p 的那条路径。
+
+    请求体必须是「一次多档」形态：`mixed_video_id_map` 把同一个 vid 归到
+    一个分组里，上游才会把 1080p/720p/480p 一次性全部下发。早先这里发的是
+    单条 `video_id`，上游只回低档位甚至回空，外部表现就是「只有 360p」。
+
+    分组键 `"1"` 只是序号；返回的 `mixed_video_id_map` 会按同一个键回带，
+    所以取哪个键都能对回来（见 app.py 的 `_wanted_vids`）。
+    """
     return post(
         "/novel/player/multi_video_model/v1/",
-        {"video_id": vid, "content_type": 1,
-         "biz_param": {"need_all_video_definition": True, "video_platform": platform}},
+        {"biz_param": {"video_platform": platform,
+                       "need_all_video_definition": True},
+         "mixed_video_id_map": {"1": [str(vid)]}},
         signed=signed, host=host,
     )
 
