@@ -13,14 +13,26 @@
 #   cp -r <app>/Contents/Resources/backend/capture   server/capture
 #   cp ShortDramaBox/Sources/Resources/index.bin.z   server/seed/index.bin.z
 
-FROM python:3.12-alpine
+# 基础镜像必须是 glibc 系 (debian slim), 不能用 alpine.
+# unidbg 的 JNI 库 natives/linux_64/libunicorn_java.so 是 glibc 编译的,
+# 在 musl 上 System.loadLibrary 直接 UnsatisfiedLinkError: no unicorn_java,
+# 签名进程虽然端口起来了但线程当场死掉, 表现就是 /sign 连不上.
+FROM python:3.12-slim
 
 # iproute2 提供 ss, 用来发现 unidbg 的临时监听端口
-# 换阿里云源: dl-cdn.alpinelinux.org 在 GitHub runner 上多次 TLS 失败, 一失败整个构建就挂
-RUN sed -i 's|https://dl-cdn.alpinelinux.org/alpine|https://mirrors.aliyun.com/alpine|g' /etc/apk/repositories \
-    && apk add --no-cache openjdk17-jre-headless iproute2 tzdata ca-certificates \
-    && cp /usr/share/zoneinfo/Asia/Shanghai /etc/localtime \
-    && echo "Asia/Shanghai" > /etc/timezone
+# 换阿里云源: deb.debian.org 在构建机上多次 TLS 失败, 一失败整个构建就挂
+RUN set -eux; \
+    if [ -f /etc/apt/sources.list.d/debian.sources ]; then \
+      sed -i 's|deb.debian.org|mirrors.aliyun.com|g' /etc/apt/sources.list.d/debian.sources; \
+    else \
+      sed -i 's|deb.debian.org|mirrors.aliyun.com|g' /etc/apt/sources.list; \
+    fi; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends \
+      openjdk-21-jre-headless iproute2 tzdata ca-certificates; \
+    rm -rf /var/lib/apt/lists/*; \
+    cp /usr/share/zoneinfo/Asia/Shanghai /etc/localtime; \
+    echo "Asia/Shanghai" > /etc/timezone
 
 WORKDIR /app
 

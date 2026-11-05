@@ -1,7 +1,10 @@
 # 1080p 与 unidbg 签名线交接文档
 
-> 状态：**未打通**。签名进程能加载 SO、能进 native，但还没吐出过一组可用的签名头。
-> 本文档写于 2026-11-03，对应仓库 commit `2a2ce05`（`main`）。
+> 状态（2026-11-05 更新）：**签名链路已打通，取流仍被上游静默拒绝**。
+> 签名进程在镜像内可用（`/sign` 能吐出真实 `X-Argus` / `X-Gorgon` / `X-Medusa` 等），
+> 但 `multi_video_model` 依旧 `HTTP 200 + 0 字节`，且**未签名请求也是同样的 0 字节**
+> —— 说明这道闸不是签名校验，而是会话/风控资格。详见文末「2026-11-05 实测」。
+> 本文档主体写于 2026-11-03，对应仓库 commit `2a2ce05`（`main`）。
 > 相关但**不等于**本文的旧文档：`server/resolver/README.md`（描述的是 `SIGNER_CMD` 子进程契约，与当前 `hg/` 网关的 HTTP 契约**不一致**，见 §3）。
 
 ---
@@ -751,3 +754,42 @@ docker run --rm --entrypoint sh hg-local-test -c 'ls -l /app/sign /app/capture/*
 > 判定成功只看 stdout 有没有 header/`===SIG_START===`，别看退出码——它永远返回 0。
 >
 > 打通之后，`hg/upstream.py` 一行不用改，只要 `SIGNER_URL` 指对、`/sign` 返回扁平 header dict 就行。
+---
+
+## 2026-11-05 实测：签名已通，卡在会话
+
+### 结论
+
+| 事实 | 证据 |
+|---|---|
+| 镜像内签名可用 | 容器里 `POST /sign` 返回 `X-Argus`(240) / `X-Gorgon`(52) / `X-Helios` / `X-Kronos` / `X-Ladon` / `X-Medusa`(884) / `X-Neptune` / `X-Soter`(120)；`/tmp/signer.log` 有「番茄海外 init 完成」「签名工作线程就绪」 |
+| 播放接口依然 0 字节 | 签名请求、**未签名请求**、伪造 `X-Khronos`、破坏 `X-Gorgon`、错误 `x-ss-stub`、gzip 请求体，六种一律 `http=200 bytes=0` |
+| 不是偶发 | 同一请求连打 10 次，2.5s 间隔，10/10 空响应 |
+| 路由存在 | 同主机 `POST /novel/player/zzz_not_a_route/v1/` 返回 `404 Page not found`，而两个 player 接口返回 200+0，说明网关匹配到了 handler |
+| 响应头表明进了应用层 | `Server-Timing: inner; dur=38,tt_agw; dur=33`、`X-Tt-Logid`、`X-Dynamic-Status: MISS`，不是 CDN 缓存页 |
+| 换网络无效 | 本机 NAT 与阿里云 `112.124.63.35`（k3s 集群）都是 0 字节 |
+| 加设备参数无效 | 补 `openudid/oaid/clientudid/dpi/ac/region/tz_offset/mcc_mnc` 等完整移动端 query 后仍 0 字节 |
+| H5 cookie 无效 | `build-dd/cookie_hg.txt`（hongguoduanju.com 域）塞进 `cookie` 头后仍 0 字节，域名不同不能串 |
+
+### 为什么说卡的是「会话」
+
+本文档 §679 早就把这条列为未验证的假设：*"没证明「有签名 → 非 0 字节」。有可能还需要 `x-tt-token` / `cookie`（游客会话）"*。
+现在的实测把「签名不足」排除了：**签名与不签名得到完全相同的空响应**，风控头不参与这个判决。
+
+另外 `desktop_bootstrap.py` 在打包模式下把 `DEVICE_POOL_SIZE` 置 0，也就是说对外发布的桌面端**不走** devicepool 的纯游客设备，
+而是一直用 `content-config.json` 里那套带 `x-tt-token` / `cookie` 的会话。`devicepool.py` 注释里「游客可用」是 CLI 场景的结论，未必适用于播放接口。
+
+### 下一步（需要凭据）
+
+1. 从红果官方 App 取一份登录态，注入服务端已有的两个开关即可，无需改代码：
+   `HG_COOKIE`（整条 cookie）、`HG_TT_TOKEN`（`x-tt-token`）。
+   设好后 `/api/tracks?vid=...` 会带着会话重新签名重试。
+2. 或者抓一份官方客户端的**成功** player 请求（URL + 全部请求头 + body），
+   逐字节对齐即可定位还差哪个头/哪个参数。
+
+### 顺带修掉的镜像问题
+
+`unidbg` 的 JNI 库 `natives/linux_64/libunicorn_java.so` 是 glibc 编译的，
+Alpine/musl 下 `System.loadLibrary` 直接 `UnsatisfiedLinkError: no unicorn_java`，
+表现是签名进程端口起来了但线程当场死掉，`/healthz` 里的 `signer:true` 还会骗人（它只判断 `SIGNER_URL` 非空）。
+`server/Dockerfile` 已改为 `python:3.12-slim` + `openjdk-21-jre-headless`（Debian 13 只有 21/25）。
