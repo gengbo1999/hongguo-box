@@ -21,7 +21,7 @@ import Foundation
 /// 3. **公网明文兜底** `https://hongguoduanju.com/video/public/<vid>/<档位>.mp4`：
 ///    站点目前只放了 360p（1080p/720p/540p/480p/240p 全 404），
 ///    仍并发探测全部档位，哪天上高清就自动用上。走到这一步会把
-///    「为什么没有高清」写进 `VideoTrack.note`，界面上直接显示，绝不静默变糊。
+///    「为什么没有高清」只写进 `VideoTrack.note` 供日志排查，不在画面上显示降级提示。
 enum PlayerAPI {
     // MARK: - 请求 profile
 
@@ -335,7 +335,6 @@ enum PlayerAPI {
                 v.codec = t.codec
                 v.url = t.url
                 v.spadeA = t.spadeA
-                v.note = t.spadeA.isEmpty ? "" : "网关/加密"
                 return v
             }
             break

@@ -596,7 +596,7 @@ private struct FeedCard: View {
                 HStack(spacing: 6) {
                     kindBadge
                     if let t = item.track, player != nil {
-                        Text((t.note.isEmpty ? "" : "⚠️ ") + "\(t.definition) · \(t.codec)")
+                        Text("\(t.definition) · \(t.codec)")
                             .font(.system(size: 11, weight: .medium))
                             .foregroundStyle(.white)
                             .padding(.horizontal, 8).padding(.vertical, 4)

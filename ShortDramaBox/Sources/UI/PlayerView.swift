@@ -452,8 +452,6 @@ private struct EpisodePage: View {
 
     @State private var player: AVPlayer?
     @State private var tracks: [VideoTrack] = []
-    /// 正在播的档位自带的降级说明（正常为空串）
-    @State private var playingNote: String = ""
     @State private var status = "准备中…"
     @State private var progress: Double = 0
     @State private var ready = false
@@ -560,24 +558,6 @@ private struct EpisodePage: View {
                 }
                 .allowsHitTesting(false)
                 .opacity(boosting ? 1 : 0)
-
-                // 取流降级提示：官方接口没给出高清档位时，把原因常驻在画面上。
-                // 用户有权知道「为什么只有 360p」，而不是默默变糊。
-                if !playingNote.isEmpty {
-                    VStack {
-                        Text("⚠️ " + playingNote)
-                            .font(.system(size: 10, weight: .medium))
-                            .foregroundStyle(.white)
-                            .multilineTextAlignment(.center)
-                            .padding(.horizontal, 9).padding(.vertical, 4)
-                            .background(.orange.opacity(0.72))
-                            .clipShape(Capsule())
-                            .padding(.top, 96)
-                            .padding(.horizontal, 12)
-                        Spacer()
-                    }
-                    .allowsHitTesting(false)
-                }
 
                 // 进度条：默认藏着（不挡画面），点视频下方才露出，3 秒后自动收起。
                 // 不给它上 if：视图树保持恒定，只改透明度和是否可点。
@@ -956,7 +936,6 @@ private struct ScrubBar: View {
             }
             HGLog.i("播放", "第 \(episode.index) 集 选中 \(best.definition)（候选 \(tracks.count) 档，" + (PlayerAPI.needsTranscode(best) ? "需本机转码" : "可直接播") + "）")
             onQuality(best.definition)
-            playingNote = best.note
             // 接口给的尺寸：横屏片源靠它避开「被截一条铺满屏幕」
             videoSize = CGSize(width: best.width, height: best.height)
             let transcoding = PlayerAPI.needsTranscode(best)
