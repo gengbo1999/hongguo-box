@@ -1,0 +1,9 @@
+name: diag
+on:
+  push:
+    paths: ['.github/workflows/diag.yml']
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo hello
