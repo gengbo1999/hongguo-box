@@ -25,6 +25,8 @@ struct PlayerView: View {
     @State private var preferredQuality: String? = nil
     /// 下一集预下载任务（换集/退出时取消）
     @State private var prefetchTask: Task<Void, Never>? = nil
+    /// 播放页是否处于强制横屏（只影响本页，退出时恢复竖屏）
+    @State private var landscape = false
 
     init(series: Series, episodes: [Episode], start: Episode) {
         self.series = series; self.episodes = episodes; _current = State(initialValue: start)
@@ -81,7 +83,12 @@ struct PlayerView: View {
             }
         }
         .onAppear { prefetchWindow(from: current) }
-        .onDisappear { prefetchTask?.cancel() }
+        .onDisappear {
+            prefetchTask?.cancel()
+            // 退出播放页一定回到竖屏，别把整个 App 留在横屏。
+            landscape = false
+            OrientationSupport.set(.portrait)
+        }
         .overlay(alignment: .topLeading) { topBar }
         .sheet(isPresented: $showPanel) { panel }
     }
@@ -134,6 +141,17 @@ struct PlayerView: View {
                 .font(.system(size: 11)).foregroundStyle(.white.opacity(0.7))
             }
             Spacer()
+            Button {
+                landscape.toggle()
+                OrientationSupport.set(landscape ? .landscape : .portrait)
+            } label: {
+                Image(systemName: landscape
+                      ? "arrow.down.right.and.arrow.up.left"
+                      : "arrow.up.left.and.arrow.down.right")
+                    .font(.system(size: 15, weight: .bold))
+                    .padding(9).background(.black.opacity(0.45)).clipShape(Circle())
+            }
+            .accessibilityLabel(landscape ? "切换竖屏" : "切换横屏")
             Button {
                 pendingSpeed = speed
                 // 默认选中：先看这一集实际在播的档位，再看用户偏好，最后取列表第一档；
@@ -260,30 +278,6 @@ struct PlayerView: View {
                     .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 0))
                 } header: {
                     groupHead("倍速", "长按画面可临时加速")
-                }
-
-                Section {
-                    if (availableOf[current.index] ?? []).isEmpty {
-                        Text("正在解析…").font(.footnote).foregroundStyle(.secondary)
-                    } else {
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            HStack(spacing: 10) {
-                                ForEach(availableOf[current.index] ?? [], id: \.self) { t in
-                                    qualityChip(t, on: pendingQuality == t.definition,
-                                                current: qualityOf[current.index] == t.definition) {
-                                        pendingQuality = t.definition
-                                    }
-                                }
-                            }
-                            .padding(.vertical, 6)
-                        }
-                        .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 0))
-                    }
-                } header: {
-                    groupHead("清晰度", currentQualityHint)
-                } footer: {
-                    Text("点选只改对勾，按「完成」才真正切换：清晰度这时才开始转码。")
-                        .font(.footnote)
                 }
 
                 Section {
@@ -547,14 +541,16 @@ private struct EpisodePage: View {
                     .allowsHitTesting(false)
                     .opacity(paused ? 1 : 0)
                 VStack {
+                    Spacer()
+                    // 原来贴在顶部 64pt，正好压在标题/集数上；改到底部进度条上方，
+                    // 横屏时也不会和顶部栏抢位置。
                     Text(String(format: "%gx 加速中", Self.boostRate))
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(.white)
                         .padding(.horizontal, 11).padding(.vertical, 5)
                         .background(.black.opacity(0.55))
                         .clipShape(Capsule())
-                        .padding(.top, 64)
-                    Spacer()
+                        .padding(.bottom, 96)
                 }
                 .allowsHitTesting(false)
                 .opacity(boosting ? 1 : 0)
@@ -921,18 +917,18 @@ private struct ScrubBar: View {
                 if let hit = TrackCache.shared.cached(episode.vid) {
                     tracks = hit
                 } else {
-                    // 取全部档位：一条都不过滤，播不了的留到后面本机转码
+                    // 只取 1080p；低档位不再作为兜底
                     tracks = await PlayerAPI.allTracks(for: episode.vid)
                     TrackCache.shared.put(episode.vid, tracks)
                 }
                 if tracks.isEmpty {
-                    status = "该集暂无可用片源"; failed = true; return
+                    status = "该集暂无 1080p 片源"; failed = true; return
                 }
             }
             guard gen == loadGen else { return }
             onTracks(tracks)
             guard let best = PlayerAPI.pick(tracks, force: forceQuality) else {
-                status = "无可用清晰度"; failed = true; return
+                status = "无 1080p 档位"; failed = true; return
             }
             HGLog.i("播放", "第 \(episode.index) 集 选中 \(best.definition)（候选 \(tracks.count) 档，" + (PlayerAPI.needsTranscode(best) ? "需本机转码" : "可直接播") + "）")
             onQuality(best.definition)

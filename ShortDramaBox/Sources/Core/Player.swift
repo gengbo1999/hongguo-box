@@ -460,10 +460,21 @@ enum PlayerAPI {
         }.joined(separator: "、")
     }
 
-    /// 全部档位，**一条都不过滤**，按清晰度从高到低。
-    /// 播不了的档位也照样返回，由播放器决定走本机转码。
-    /// 三条线路全不通时回退公网明文，并把失败原因写进 `note`。
+    /// 只看 1080p：低档位在这台机器上体验不可接受，干脆不展示也不回退，
+    /// 拿不到就明确报「暂无 1080p」，避免悄悄降到 360p。
+    static func is1080p(_ t: VideoTrack) -> Bool {
+        if t.definition.lowercased().contains("1080") { return true }
+        let short = min(t.width, t.height)
+        return short >= 1080 && t.width > 0 && t.height > 0
+    }
+
+    /// 对外只暴露 1080p，按清晰度从高到低。
     static func allTracks(for vid: String) async -> [VideoTrack] {
+        sorted(await fetchAllTracks(for: vid).filter(is1080p))
+    }
+
+    /// 原始取流：网关 → 批量 → 单条 → 公网明文，保留所有档位。
+    private static func fetchAllTracks(for vid: String) async -> [VideoTrack] {
         var reasons: [String] = []
         // 0) 服务端签名网关（当前唯一能稳定拿 1080p 的路径）
         let remote = await remoteTracks(vid)

@@ -12,6 +12,7 @@ import SwiftUI
 /// 同名各季是独立剧集（标题带「第N季」），会一起返回。
 struct SearchView: View {
     @State private var q = ""
+    @FocusState private var searchFocused: Bool
 
     // 服务端全库
     @State private var local: [Series] = []
@@ -46,28 +47,67 @@ struct SearchView: View {
 
     var body: some View {
         NavigationStack {
-            Group {
-                if keyword.isEmpty {
-                    emptyState
-                } else if results.isEmpty {
-                    searchingState
-                } else {
-                    ScrollView {
-                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 110), spacing: 10)], spacing: 14) {
-                            ForEach(results) { s in
-                                NavigationLink { DetailView(series: s) } label: { PosterCard(series: s, width: 110) }
-                                    .buttonStyle(.plain)
-                            }
-                        }.padding()
+            // 用固定的 ZStack 承载三种状态，搜索框挂在外层：
+            // 系统 .searchable 在结果页点「取消」时会把整条搜索栏收走，
+            // 这里换成常驻输入框，取消只是收起键盘，输入入口始终在。
+            ZStack {
+                Group {
+                    if keyword.isEmpty {
+                        emptyState
+                    } else if results.isEmpty {
+                        searchingState
+                    } else {
+                        ScrollView {
+                            LazyVGrid(columns: [GridItem(.adaptive(minimum: 110), spacing: 10)], spacing: 14) {
+                                ForEach(results) { s in
+                                    NavigationLink { DetailView(series: s) } label: { PosterCard(series: s, width: 110) }
+                                        .buttonStyle(.plain)
+                                }
+                            }.padding()
+                        }
+                        .safeAreaInset(edge: .top) { noteBar }
                     }
-                    .safeAreaInset(edge: .top) { noteBar }
                 }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
             .navigationTitle("搜索")
-            .searchable(text: $q, prompt: "输入片名")
+            .safeAreaInset(edge: .top) { searchBar }
             .onChange(of: q) { v in schedule(v) }
             .task { await warmUp() }
         }
+    }
+
+    /// 常驻搜索框：不再用 .searchable，避免它随结果页切换被销毁。
+    private var searchBar: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(.secondary)
+            TextField("输入片名", text: $q)
+                .focused($searchFocused)
+                .submitLabel(.search)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+            if !q.isEmpty {
+                Button {
+                    q = ""
+                    searchFocused = true
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 15))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("清除")
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .background(Color.secondary.opacity(0.12))
+        .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .background(.regularMaterial)
     }
 
     // MARK: - 各状态视图

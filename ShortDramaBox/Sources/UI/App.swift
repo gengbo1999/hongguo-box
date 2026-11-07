@@ -1,7 +1,18 @@
 import SwiftUI
+import UIKit
+
+/// 只做一件事：把「当前允许哪些方向」交给 OrientationSupport。
+/// 默认竖屏；播放页点横屏按钮时才临时放开。
+final class AppDelegate: NSObject, UIApplicationDelegate {
+    func application(_ application: UIApplication,
+                     supportedInterfaceOrientationsFor window: UIWindow?) -> UIInterfaceOrientationMask {
+        OrientationSupport.mask
+    }
+}
 
 @main
 struct DuanjuApp: App {
+    @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     init() { HGLog.start() }
     var body: some Scene {
         WindowGroup {

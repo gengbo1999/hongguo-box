@@ -546,9 +546,6 @@ private struct FeedCard: View {
     var onDetail: () -> Void    // 右侧「选集」：进详情页
 
     @State private var player: AVPlayer?
-    @State private var muted = false
-    @State private var liked = false
-    @State private var showQuality = false
     @State private var ended: NSObjectProtocol?
     /// 画面填充模式（0 自动 / 1 铺满 / 2 适应），与播放器页共用
     @AppStorage("video_fit_mode") private var fitMode = 0
@@ -610,27 +607,6 @@ private struct FeedCard: View {
             .padding(.leading, 14).padding(.top, 8)
             .allowsHitTesting(false)
 
-            // 右侧操作栏
-            VStack(spacing: 20) {
-                Button { liked.toggle() } label: {
-                    sideIcon(liked ? "heart.fill" : "heart", "喜欢",
-                             color: liked ? .pink : .white)
-                }
-                Button { muted.toggle(); player?.isMuted = muted } label: {
-                    sideIcon(muted ? "speaker.slash.fill" : "speaker.wave.2.fill",
-                             muted ? "已静音" : "有声")
-                }
-                Button(action: onDetail) {
-                    sideIcon("list.bullet", "选集")
-                }
-                // 自动按片源比例决定；不合胃口时能当场切：铺满(裁边) / 适应(留黑边)
-                Button { fitMode = VideoFit.next(fitMode) } label: {
-                    sideIcon(VideoFit.icon(fitMode), VideoFit.label(fitMode))
-                }
-            }
-            .padding(.trailing, 14)
-            .frame(maxWidth: .infinity, alignment: .trailing)
-
             // 底部信息
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 8) {
@@ -654,7 +630,7 @@ private struct FeedCard: View {
                 Text("上滑看下一部 · 点画面继续观看")
                     .font(.system(size: 11)).foregroundStyle(.white.opacity(0.45))
             }
-            .padding(.horizontal, 16).padding(.bottom, 24)
+            .padding(.horizontal, 16).padding(.bottom, 56)
             // 必须显式贴底：ZStack 默认垂直居中，只设 maxWidth 会让这块文字
             // 飘在屏幕中间挡住画面（简介尤其明显）。
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
@@ -664,6 +640,25 @@ private struct FeedCard: View {
                     .frame(height: 260).frame(maxHeight: .infinity, alignment: .bottom)
             )
             .allowsHitTesting(false)
+
+            // 右侧不再放点赞/静音/铺满这一列；只留一个「选集」入口，
+            // 放在右下角，避免恢复成整列悬浮按钮。
+            Button(action: onDetail) {
+                HStack(spacing: 5) {
+                    Image(systemName: "list.bullet")
+                        .font(.system(size: 12, weight: .semibold))
+                    Text("选集")
+                        .font(.system(size: 12, weight: .semibold))
+                }
+                .foregroundStyle(.white)
+                .padding(.horizontal, 12).padding(.vertical, 7)
+                .background(.black.opacity(0.55))
+                .clipShape(Capsule())
+                .overlay(Capsule().stroke(.white.opacity(0.18), lineWidth: 1))
+            }
+            .buttonStyle(.plain)
+            .padding(.trailing, 16).padding(.bottom, 24)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .clipped()
@@ -696,13 +691,6 @@ private struct FeedCard: View {
         .background(item.kind.tint.opacity(0.92))
         .clipShape(Capsule())
         .shadow(color: .black.opacity(0.25), radius: 3, y: 1)
-    }
-
-    private func sideIcon(_ name: String, _ label: String, color: Color = .white) -> some View {
-        VStack(spacing: 4) {
-            Image(systemName: name).font(.system(size: 24)).foregroundStyle(color)
-            Text(label).font(.system(size: 11)).foregroundStyle(.white)
-        }
     }
 
     private var loadingOverlay: some View {
@@ -745,7 +733,6 @@ private struct FeedCard: View {
         // 同播放页：限住前向缓冲，推荐页常驻的播放器不要越读越多
         p.currentItem?.preferredForwardBufferDuration = 6
         p.automaticallyWaitsToMinimizeStalling = false
-        p.isMuted = muted
         player = p
         // 申请全局播放权：会把上一个还在播的画面停掉
         PlaybackCenter.shared.claim("feed:\(item.id)") { [weak p] in p?.pause() }
@@ -874,6 +861,9 @@ struct FeedView: View {
         .scrollTargetBehavior(.paging)
         .scrollPosition(id: $scrolledID)
         .scrollIndicators(.hidden)
+        // 底部上滑是系统 Home 手势；不加这行时，从屏幕最下沿起划会被系统
+        // 抢走，和竖向翻页打架。defer 后第一次交给 App 翻页。
+        .defersSystemGestures(on: .bottom)
         .onChange(of: scrolledID) { v in if let v { model.prepare(v) } }
         .onAppear { model.prepare(0) }
         .overlay(alignment: .bottom) {
