@@ -75,7 +75,8 @@ struct PlayerView: View {
             .scrollDisabled(pagerLocked)
             .ignoresSafeArea()
         }
-        .defersSystemGestures(on: .bottom)
+        // 不调用 defersSystemGestures：底部边缘的上滑必须优先交给 iOS
+        // 切换 App 的 Home 手势，翻页只发生在画面主体区域。
         .onChange(of: scrolledID) { v in
             if let v, let e = episodes.first(where: { $0.index == v }) {
                 current = e

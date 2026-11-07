@@ -66,8 +66,14 @@ struct SearchView: View {
                             }.padding()
                         }
                         .safeAreaInset(edge: .top) { noteBar }
+                        .scrollDismissesKeyboard(.immediately)
                     }
                 }
+                // 点空白处收键盘：点击落点没被结果卡片/按钮消费时触发；
+                // 用 simultaneousGesture，点卡片仍能正常进详情。
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .contentShape(Rectangle())
+                .simultaneousGesture(TapGesture().onEnded { searchFocused = false })
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .navigationTitle("搜索")
@@ -88,6 +94,7 @@ struct SearchView: View {
                 .submitLabel(.search)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
+                .onSubmit { searchFocused = false }
             if !q.isEmpty {
                 Button {
                     q = ""

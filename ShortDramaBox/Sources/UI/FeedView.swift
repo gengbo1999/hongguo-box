@@ -861,9 +861,8 @@ struct FeedView: View {
         .scrollTargetBehavior(.paging)
         .scrollPosition(id: $scrolledID)
         .scrollIndicators(.hidden)
-        // 底部上滑是系统 Home 手势；不加这行时，从屏幕最下沿起划会被系统
-        // 抢走，和竖向翻页打架。defer 后第一次交给 App 翻页。
-        .defersSystemGestures(on: .bottom)
+        // 不调用 defersSystemGestures：底部边缘的上滑必须优先交给 iOS
+        // 切换 App 的 Home 手势，翻页只发生在画面主体区域。
         .onChange(of: scrolledID) { v in if let v { model.prepare(v) } }
         .onAppear { model.prepare(0) }
         .overlay(alignment: .bottom) {
