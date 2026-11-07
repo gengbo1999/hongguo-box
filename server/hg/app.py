@@ -627,6 +627,20 @@ class Handler(BaseHTTPRequestHandler):
 
         query = body.get("query") if isinstance(body.get("query"), dict) else {}
         payload = body.get("body")
+
+        # 取流接口走纯 JS 签名客户端：unidbg 对 multi_video_model 会被判
+        # 110001，JS 实现配已注册设备可稳定返回 1080p。其余接口保持原样。
+        if path.startswith(("/novel/player/multi_video_model/",
+                            "/novel/player/video_model/")):
+            vids = self._wanted_vids(payload)
+            if vids:
+                try:
+                    got = upstream.js_video_model(vids[0])
+                    got = self._normalize_video_model(got, payload)
+                    return self._send(200, {"ok": True, "data": got})
+                except upstream.UpstreamError as e:
+                    return self._send(502, {"ok": False, "error": e.code,
+                                            "detail": e.detail})
         method = str(body.get("method") or "POST").upper()
         try:
             if method == "GET":

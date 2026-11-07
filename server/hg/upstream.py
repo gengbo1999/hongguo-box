@@ -14,6 +14,8 @@ import hashlib
 import json
 import os
 import random
+import shutil
+import subprocess
 import threading
 import time
 import urllib.parse
@@ -312,6 +314,18 @@ def parse_tracks(payload):
         lists.append(vm["video_list"])
     if isinstance(data.get("video_list"), list):
         lists.append(data["video_list"])
+    # 纯 JS 取流返回的是 {data: {<vid>: {video_model: "<json>"}}}，需要再挖一层
+    for entry in data.values():
+        if not isinstance(entry, dict):
+            continue
+        ev = entry.get("video_model")
+        if isinstance(ev, str) and ev.lstrip().startswith("{"):
+            try:
+                ev = json.loads(ev)
+            except ValueError:
+                continue
+        if isinstance(ev, dict) and isinstance(ev.get("video_list"), list):
+            lists.append(ev["video_list"])
 
     tracks = []
     for vlist in lists:
@@ -351,9 +365,70 @@ def pick_best(tracks):
     return max(tracks, key=lambda t: t["size"]) if tracks else None
 
 
+_JS_SCRIPT = os.environ.get("HG_JS_VIDEO", "/app/sign/js/video_model.cjs")
+_JS_CACHE = {}
+_JS_TTL = 300
+_JS_CACHE_MAX = 256
+
+
+def _node_bin():
+    return os.environ.get("NODE_BIN") or shutil.which("node") or "/usr/local/bin/node"
+
+
+def js_video_model(vid, timeout=25):
+    """用纯 JS 签名客户端取 video_model。
+
+    unidbg 的签名能被上游接收，但 multi_video_model 会判 110001；这套 JS
+    实现配已注册设备可以稳定拿到 5 档（含 1080p）。脚本不存在时直接抛
+    UpstreamError，让调用方回退旧路径。
+    """
+    now = time.time()
+    hit = _JS_CACHE.get(str(vid))
+    if hit and now - hit[0] < _JS_TTL:
+        return hit[1]
+    script = _JS_SCRIPT
+    if not os.path.isfile(script):
+        raise UpstreamError("js_missing", script)
+    node = _node_bin()
+    try:
+        p = subprocess.run(
+            [node, script, str(vid)],
+            capture_output=True,
+            timeout=timeout,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as e:
+        raise UpstreamError("js_timeout", f"{timeout}s") from e
+    except OSError as e:
+        raise UpstreamError("js_node_missing", repr(e)) from e
+    if p.returncode != 0:
+        detail = (p.stderr or b"").decode("utf-8", "replace").strip()[:300]
+        raise UpstreamError("js_failed", detail or f"exit {p.returncode}")
+    try:
+        payload = json.loads((p.stdout or b"").decode("utf-8", "replace"))
+    except ValueError as e:
+        raise UpstreamError("js_bad_json", repr(e)) from e
+    code = payload.get("code", payload.get("Code")) if isinstance(payload, dict) else None
+    if code not in (0, "0", None):
+        msg = payload.get("message") or payload.get("Message") or code
+        raise UpstreamError("js_upstream", str(msg)[:200])
+    with _lock:
+        if len(_JS_CACHE) >= _JS_CACHE_MAX:
+            _JS_CACHE.clear()
+        _JS_CACHE[str(vid)] = (now, payload)
+    return payload
+
+
 def resolve_tracks(vid, host=None):
-    """依次尝试三条路径，返回 (tracks, 诊断信息)。"""
+    """依次尝试 JS 取流与三条 unidbg 路径，返回 (tracks, 诊断信息)。"""
     notes = []
+    try:
+        tracks = parse_tracks(js_video_model(vid))
+        if tracks:
+            return tracks, {"path": "js", "notes": notes}
+        notes.append("js: no_tracks")
+    except UpstreamError as e:
+        notes.append(f"js: {e.code}")
     attempts = [
         ("multi1024", lambda: multi_video_model(vid, 1024, host=host)),
         ("multi3", lambda: multi_video_model(vid, 3, host=host)),

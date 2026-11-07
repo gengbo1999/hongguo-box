@@ -20,6 +20,7 @@
 FROM python:3.12-slim
 
 # iproute2 提供 ss, 用来发现 unidbg 的临时监听端口
+# nodejs 用于纯 JS 签名客户端 (server/sign/js/video_model.cjs)
 # 换阿里云源: deb.debian.org 在构建机上多次 TLS 失败, 一失败整个构建就挂
 RUN set -eux; \
     if [ -f /etc/apt/sources.list.d/debian.sources ]; then \
@@ -29,7 +30,7 @@ RUN set -eux; \
     fi; \
     apt-get update; \
     apt-get install -y --no-install-recommends \
-      openjdk-21-jre-headless iproute2 tzdata ca-certificates; \
+      openjdk-21-jre-headless iproute2 tzdata ca-certificates nodejs; \
     rm -rf /var/lib/apt/lists/*; \
     cp /usr/share/zoneinfo/Asia/Shanghai /etc/localtime; \
     echo "Asia/Shanghai" > /etc/timezone
@@ -46,6 +47,8 @@ RUN set -eux; \
     chmod +x /app/entrypoint.sh; \
     if [ -d /app/src/sign ]; then cp -r /app/src/sign /app/sign; \
       echo "打包了签名 jar"; else echo "没有 server/sign, 跳过签名"; fi; \
+    if [ -f /app/sign/js/video_model.cjs ]; then \
+      echo "打包了 JS 取流脚本"; else echo "缺少 JS 取流脚本"; fi; \
     if [ -d /app/src/capture ]; then cp -r /app/src/capture /app/capture; \
       echo "打包了 capture"; else echo "没有 server/capture, 跳过"; fi; \
     if [ -f /app/src/seed/index.bin.z ]; then \

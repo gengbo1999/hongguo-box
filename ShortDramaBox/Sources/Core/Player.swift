@@ -466,7 +466,11 @@ enum PlayerAPI {
     /// 三条线路全不通时回退公网明文，并把失败原因写进 `note`。
     static func allTracks(for vid: String) async -> [VideoTrack] {
         var reasons: [String] = []
-        // 1) 批量接口（主力）
+        // 0) 服务端签名网关（当前唯一能稳定拿 1080p 的路径）
+        let remote = await remoteTracks(vid)
+        if !remote.isEmpty { return sorted(remote) }
+        reasons.append("网关无档位")
+        // 1) 批量接口（本地直连；2026-10 起匿名请求多半返回空体）
         for p in profiles {
             switch await multiAttempt(p, vid: vid) {
             case .success(let t):

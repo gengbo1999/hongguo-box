@@ -28,6 +28,11 @@ enum RemoteResolver {
     /// UserDefaults 里显式填了 `resolver_base` 就用填的（自建/调试），
     /// 填成空串等于关掉远端，全部走本地直连。
     static var base: String? {
+        // 命令行调试（hg2）没有 App 的 UserDefaults 域，用环境变量覆盖。
+        if let raw = ProcessInfo.processInfo.environment["RESOLVER_BASE"],
+           !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
         guard let raw = UserDefaults.standard.string(forKey: "resolver_base") else {
             return defaultBase
         }
