@@ -7,7 +7,10 @@ struct DetailView: View {
     @State private var loading = true
     @State private var play: Episode?
     @State private var siblings: [Series] = []
+    /// 多季拼接后的播放列表：跨季自动连播靠它。
+    @State private var playlist: [Episode] = []
     @ObservedObject private var store = WatchStore.shared
+    @ObservedObject private var follows = FollowStore.shared
 
     init(series: Series) { self.series = series; _detail = State(initialValue: series) }
 
@@ -21,7 +24,9 @@ struct DetailView: View {
                 }
                 if let p = store.progress(seriesId: series.id) {
                     Button {
-                        if p.episode >= 1 && p.episode <= episodes.count { play = episodes[p.episode - 1] }
+                        if p.episode >= 1 && p.episode <= episodes.count {
+                            play = playlistEpisode(for: episodes[p.episode - 1])
+                        }
                     } label: {
                         Label("继续观看 第\(p.episode)集", systemImage: "play.circle.fill")
                             .frame(maxWidth: .infinity)
@@ -36,7 +41,9 @@ struct DetailView: View {
         .navigationTitle(detail.title).navigationBarTitleDisplayMode(.inline)
         .task { await load() }
         .fullScreenCover(item: $play) { ep in
-            PlayerView(series: detail, episodes: episodes, start: ep)
+            PlayerView(series: detail,
+                       episodes: playlist.isEmpty ? episodes : playlist,
+                       start: ep)
         }
     }
 
@@ -57,6 +64,16 @@ struct DetailView: View {
                     Text(detail.tags.prefix(4).joined(separator: " · "))
                         .font(.system(size: 11)).foregroundStyle(.pink.opacity(0.9))
                 }
+                Button {
+                    follows.toggle(series: detail, siblings: siblings)
+                } label: {
+                    Label(follows.isFollowing(detail) ? "已关注" : "关注",
+                          systemImage: follows.isFollowing(detail) ? "heart.fill" : "heart")
+                        .font(.system(size: 12, weight: .semibold))
+                }
+                .buttonStyle(.bordered)
+                .tint(.pink)
+                .controlSize(.small)
             }
             Spacer()
         }.padding(.horizontal)
@@ -71,8 +88,8 @@ struct DetailView: View {
             Text("选集").font(.headline).padding(.horizontal)
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 56), spacing: 8)], spacing: 8) {
                 ForEach(episodes) { ep in
-                    Button { play = ep } label: {
-                        Text("\(ep.index)")
+                    Button { play = playlistEpisode(for: ep) } label: {
+                        Text("\(ep.displayNumber)")
                             .font(.system(size: 14, weight: watching == ep.index ? .bold : .regular))
                             .frame(maxWidth: .infinity, minHeight: 38)
                             .background(watching == ep.index
@@ -117,19 +134,42 @@ struct DetailView: View {
             if !s.title.isEmpty { detail = s }
             episodes = e
         }
+        // 先让当前季能点，再慢慢把其它季拼进来。
+        playlist = episodes.map { ep in
+            Episode(index: ep.index, vid: ep.vid,
+                    seriesId: detail.id, seriesTitle: detail.title, seriesCover: detail.cover,
+                    seasonNumber: detail.seasonNumber ?? 1, episodeNumber: ep.index)
+        }
         loading = false
         await loadSiblings()
+        await buildPlaylist()
+        if follows.isFollowing(detail) {
+            follows.merge(series: detail, siblings: siblings)
+        }
+        follows.markSeen(base: detail.seasonBase ?? detail.title, season: detail.seasonNumber ?? 0)
+    }
+
+    /// 当前季第 N 集 → 多季播放列表里的那一项（全局序号）。
+    private func playlistEpisode(for ep: Episode) -> Episode {
+        playlist.first { $0.seriesId == detail.id && $0.episodeNumber == ep.index } ?? ep
+    }
+
+    /// 把所有兄弟季的集数按季号接起来。没有季标记时保持当前季不变。
+    private func buildPlaylist() async {
+        let merged = await MultiSeasonPlaylist.build(
+            series: detail, episodes: episodes, siblings: siblings)
+        if merged.count > playlist.count { playlist = merged }
     }
 
     private func loadSiblings() async {
-        guard let base = detail.seasonBase ?? series.seasonBase else { return }
-        var found: [Series] = []
-        if let p = try? await SearchAPI.remote(base) { found = p.list }
-        if found.isEmpty {
-            found = await CatalogAPI.search(base, limit: 60).list
+        // 第一季标题可能不带「第N季」，用完整标题作基准，才能找到「…第2季」。
+        let base = detail.seasonBase ?? series.seasonBase ?? detail.title
+        var found = await CatalogAPI.search(base, limit: 60).list
+        if found.isEmpty, let p = try? await SearchAPI.remote(base) {
+            found = p.list
         }
         siblings = found
-            .filter { $0.id != series.id && $0.title.hasPrefix(base) }
+            .filter { $0.id != series.id && ($0.seasonBase ?? $0.title) == base }
             .sorted { ($0.seasonNumber ?? 9999) < ($1.seasonNumber ?? 9999) }
     }
 }

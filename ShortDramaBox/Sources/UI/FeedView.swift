@@ -44,6 +44,8 @@ struct FeedItem: Identifiable {
     var episode: Episode?
     /// 解析时顺手存下的全集列表，点画面时直接起播，不用再请求一次
     var episodes: [Episode] = []
+    /// 多季拼接后的连续播放列表；单季剧为空，起播时回落到 episodes
+    var playlist: [Episode] = []
     var track: VideoTrack?
     var status: Status = .pending
     var id: String { series.id }
@@ -466,6 +468,11 @@ final class FeedModel: ObservableObject {
         let ep = eps.first { $0.index == 1 } ?? eps[0]
         items[i].episode = ep
         items[i].episodes = eps
+        // 第一季可能没有季标记，而第二季有；统一让 helper 精确查一次再拼。
+        let playlistTask = Task {
+            await MultiSeasonPlaylist.build(series: full, episodes: eps)
+        }
+        defer { playlistTask.cancel() }
         HGLog.i("推荐", "\(series.title) 共 \(eps.count) 集")
 
         // 取流：全部档位都要，播不了的留给本机转码
@@ -492,6 +499,10 @@ final class FeedModel: ObservableObject {
                 return
             }
             setStatus(i, .ready(url))
+            let list = await playlistTask.value
+            if isCurrent(i, series.id), !Task.isCancelled {
+                items[i].playlist = list
+            }
         } catch {
             guard items.indices.contains(i) else { return }
             // 取消不是错误：留成 .pending 等下次重来；真失败才报错。
@@ -820,22 +831,25 @@ struct FeedView: View {
         guard model.items.indices.contains(i) else { return }
         let it = model.items[i]
         if !it.episodes.isEmpty {
-            play = PlayTarget(series: it.series, episodes: it.episodes, start: resumeEpisode(it))
+            let list = it.playlist.isEmpty ? it.episodes : it.playlist
+            play = PlayTarget(series: it.series, episodes: list, start: startEpisode(it, in: list))
             return
         }
         Task {
             guard let (s, eps) = try? await Catalog.detail(it.series.id), !eps.isEmpty else { return }
+            let list = await MultiSeasonPlaylist.build(series: s, episodes: eps)
             var filled = it
             filled.episodes = eps
-            play = PlayTarget(series: s, episodes: eps, start: resumeEpisode(filled))
+            filled.playlist = list
+            play = PlayTarget(series: s, episodes: list, start: startEpisode(filled, in: list))
         }
     }
 
     /// 推荐页进来的固定从第 1 集起（和上面卡片里播的是同一集，不会对不上）。
     /// 续看走「历史」页。
-    private func resumeEpisode(_ it: FeedItem) -> Episode {
-        let want = it.episode?.index ?? 1
-        return it.episodes.first { $0.index == want } ?? it.episodes[0]
+    private func startEpisode(_ it: FeedItem, in list: [Episode]) -> Episode {
+        let wantVid = it.episode?.vid
+        return list.first { $0.vid == wantVid } ?? list.first ?? it.episodes[0]
     }
 
     /// 原生竖向分页：每页正好一屏。

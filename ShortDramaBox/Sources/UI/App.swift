@@ -24,6 +24,7 @@ struct DuanjuApp: App {
 
 struct RootView: View {
     @State private var tab = 0
+    @ObservedObject private var follows = FollowStore.shared
 
     var body: some View {
         // 记录当前选中的 Tab：推荐页要在切走时停掉后台预取，
@@ -35,8 +36,10 @@ struct RootView: View {
             BrowseView().tag(2).tabItem { Label("分类", systemImage: "square.grid.2x2.fill") }
             SearchView().tag(3).tabItem { Label("搜索", systemImage: "magnifyingglass") }
             HistoryView().tag(4).tabItem { Label("记录", systemImage: "clock.fill") }
+                .badge(follows.updateCount)
         }
         .tint(.pink)
+        .task { await follows.refreshAll() }
         .onChange(of: tab) { t in HGLog.i("界面", "切到第 \(t) 个 Tab") }
     }
 }

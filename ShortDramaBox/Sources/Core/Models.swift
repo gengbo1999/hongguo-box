@@ -12,9 +12,21 @@ struct Series: Identifiable, Hashable, Codable {
 }
 
 struct Episode: Identifiable, Hashable {
+    /// 播放列表里的全局序号；单季时等于集号，多季拼接后用于翻页与缓存键。
     let index: Int
     let vid: String
+    /// 所属季（多季拼接时填写）；单季为空。
+    var seriesId: String = ""
+    var seriesTitle: String = ""
+    var seriesCover: String = ""
+    var seasonNumber: Int = 0
+    /// 本季内的集号；0 表示用 index。
+    var episodeNumber: Int = 0
+
     var id: Int { index }
+    /// 展示给用户的集号：多季时仍是「本季第几集」。
+    var displayNumber: Int { episodeNumber > 0 ? episodeNumber : index }
+    var hasSeason: Bool { seasonNumber > 0 && !seriesTitle.isEmpty }
 }
 
 struct VideoTrack: Hashable {

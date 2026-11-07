@@ -221,40 +221,59 @@ struct SearchView: View {
 }
 
 struct HistoryView: View {
+    private enum Tab: String, CaseIterable { case history = "观看记录", follows = "我的关注" }
+    @State private var tab: Tab = .history
     @ObservedObject private var store = WatchStore.shared
 
     var body: some View {
         NavigationStack {
-            Group {
-                if store.items.isEmpty {
-                    CompatUnavailable("暂无观看记录", systemImage: "clock", desc: "播放后会自动记录进度")
-                } else {
-                    List {
-                        ForEach(store.items) { it in
-                            NavigationLink {
-                                DetailView(series: Series(id: it.seriesId, title: it.title, cover: it.cover))
-                            } label: {
-                                HStack(spacing: 12) {
-                                    AsyncImage(url: URL(string: it.cover)) { $0.resizable().aspectRatio(contentMode: .fill) }
-                                        placeholder: { Rectangle().fill(Color.white.opacity(0.1)) }
-                                        .frame(width: 46, height: 62).clipShape(RoundedRectangle(cornerRadius: 6))
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        Text(it.title).font(.system(size: 14, weight: .medium)).lineLimit(1)
-                                        Text("看到第 \(it.episode) 集 · \(Int(it.seconds / 60)) 分 \(Int(it.seconds) % 60) 秒")
-                                            .font(.system(size: 11)).foregroundStyle(.secondary)
-                                    }
-                                }
-                            }
-                        }
-                        .onDelete { idx in
-                            for i in idx where i < store.items.count {
-                                store.remove(seriesId: store.items[i].seriesId)
+            VStack(spacing: 0) {
+                Picker("记录类型", selection: $tab) {
+                    ForEach(Tab.allCases, id: \.self) { t in
+                        Text(t.rawValue).tag(t)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .padding(.horizontal, 16).padding(.vertical, 8)
+
+                switch tab {
+                case .history: historyList
+                case .follows: FollowListView()
+                }
+            }
+            .navigationTitle("记录")
+        }
+        .task { await FollowStore.shared.refreshAll() }
+    }
+
+    @ViewBuilder
+    private var historyList: some View {
+        if store.items.isEmpty {
+            CompatUnavailable("暂无观看记录", systemImage: "clock", desc: "播放后会自动记录进度")
+        } else {
+            List {
+                ForEach(store.items) { it in
+                    NavigationLink {
+                        DetailView(series: Series(id: it.seriesId, title: it.title, cover: it.cover))
+                    } label: {
+                        HStack(spacing: 12) {
+                            AsyncImage(url: URL(string: it.cover)) { $0.resizable().aspectRatio(contentMode: .fill) }
+                                placeholder: { Rectangle().fill(Color.white.opacity(0.1)) }
+                                .frame(width: 46, height: 62).clipShape(RoundedRectangle(cornerRadius: 6))
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(it.title).font(.system(size: 14, weight: .medium)).lineLimit(1)
+                                Text("看到第 \(it.episode) 集 · \(Int(it.seconds / 60)) 分 \(Int(it.seconds) % 60) 秒")
+                                    .font(.system(size: 11)).foregroundStyle(.secondary)
                             }
                         }
                     }
                 }
+                .onDelete { idx in
+                    for i in idx where i < store.items.count {
+                        store.remove(seriesId: store.items[i].seriesId)
+                    }
+                }
             }
-            .navigationTitle("观看记录")
         }
     }
 }

@@ -120,6 +120,29 @@ struct PlayerView: View {
         }
     }
 
+    /// 多季拼接后，标题和集号要跟着当前集走，而不是永远显示第一季。
+    private var multiSeason: Bool {
+        Set(episodes.map(\.seasonNumber)).count > 1
+    }
+
+    private var currentTitle: String {
+        current.seriesTitle.isEmpty ? series.title : current.seriesTitle
+    }
+
+    /// 当前这一季自己的集数；多季拼接后不能用整条播放列表的长度。
+    private var currentSeasonCount: Int {
+        guard !current.seriesId.isEmpty else { return episodes.count }
+        let same = episodes.filter { $0.seriesId == current.seriesId }
+        return same.isEmpty ? episodes.count : same.count
+    }
+
+    private var currentPosition: String {
+        if multiSeason && current.seasonNumber > 0 {
+            return "第\(current.seasonNumber)季 · 第\(current.displayNumber)集 / 共\(currentSeasonCount)集"
+        }
+        return "第 \(current.displayNumber) 集 / \(currentSeasonCount)"
+    }
+
     private var topBar: some View {
         HStack(spacing: 12) {
             Button { dismiss() } label: {
@@ -127,9 +150,9 @@ struct PlayerView: View {
                     .padding(9).background(.black.opacity(0.45)).clipShape(Circle())
             }
             VStack(alignment: .leading, spacing: 2) {
-                Text(series.title).font(.system(size: 13, weight: .semibold)).lineLimit(1)
+                Text(currentTitle).font(.system(size: 13, weight: .semibold)).lineLimit(1)
                 HStack(spacing: 6) {
-                    Text("第 \(current.index) 集 / \(episodes.count)")
+                    Text(currentPosition)
                     if let q = qualityOf[current.index] {
                         Text("·").opacity(0.5)
                         Text(q)
@@ -250,8 +273,10 @@ struct PlayerView: View {
         let on = pendingEpisode == ep.index
         let playing = ep.index == current.index
         return Button { pendingEpisode = ep.index } label: {
-            Text("\(ep.index)")
-                .font(.system(size: 14, weight: on ? .semibold : .regular))
+            Text(multiSeason && ep.seasonNumber > 0
+                 ? "\(ep.seasonNumber)-\(ep.displayNumber)"
+                 : "\(ep.displayNumber)")
+                .font(.system(size: multiSeason ? 12 : 14, weight: on ? .semibold : .regular))
                 .foregroundStyle(on ? Color.white : Color.primary)
                 .frame(maxWidth: .infinity, minHeight: 42)
                 .background(on ? Color.pink : Color.secondary.opacity(0.11))
@@ -292,7 +317,8 @@ struct PlayerView: View {
                     .frame(height: 250)
                     .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
                 } header: {
-                    groupHead("选集", "正在播第 \(current.index) 集 · 共 \(episodes.count) 集")
+                    groupHead("选集", "正在播第 \(current.displayNumber) 集 · 共 \(currentSeasonCount) 集"
+                              + (multiSeason ? "（\(currentTitle)）" : ""))
                 }
 
                 Section {
@@ -964,8 +990,9 @@ private struct ScrubBar: View {
             // 其次是观看记录（退出去重进接得上）
             var at = lastPosition
             if at <= 3 {
-                at = WatchStore.shared.progress(seriesId: series.id)
-                    .flatMap { $0.episode == episode.index ? $0.seconds : nil } ?? 0
+                let historyId = episode.seriesId.isEmpty ? series.id : episode.seriesId
+                at = WatchStore.shared.progress(seriesId: historyId)
+                    .flatMap { $0.episode == episode.displayNumber ? $0.seconds : nil } ?? 0
             }
             if at > 3 {
                 await p.seek(to: CMTime(seconds: at, preferredTimescale: 600))
@@ -985,8 +1012,11 @@ private struct ScrubBar: View {
                 forInterval: CMTime(seconds: 5, preferredTimescale: 600), queue: .main) { t in
                 let sec = CMTimeGetSeconds(t)
                 guard sec.isFinite, sec > 0 else { return }
-                WatchStore.shared.record(seriesId: series.id, title: series.title,
-                                         cover: series.cover, episode: episode.index, seconds: sec)
+                WatchStore.shared.record(
+                    seriesId: episode.seriesId.isEmpty ? series.id : episode.seriesId,
+                    title: episode.seriesTitle.isEmpty ? series.title : episode.seriesTitle,
+                    cover: episode.seriesCover.isEmpty ? series.cover : episode.seriesCover,
+                    episode: episode.displayNumber, seconds: sec)
             }
 
             // 进度条：0.3 秒刷一次当前位置和总时长
