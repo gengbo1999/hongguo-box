@@ -42,7 +42,7 @@ git show 4e4e266^:ShortDramaBox/Sources/Resources/index.bin.z > server/seed/inde
 |---|---|---|
 | GET | `/healthz` | 库存条数、是否已导入、签名进程是否可用 |
 | GET | `/api/nav` | 分类列表 |
-| GET | `/api/search?q=&limit=&offset=` | 全库搜索（`q` 可为片名片段或 sid） |
+| GET | `/api/search?q=&limit=&offset=` | 全库搜索（`q` 可为片名片段或 sid）；首屏会合并站内搜索前 10 条并落库，站方超时自动退回本地 |
 | GET | `/api/detail?sid=` | 剧集信息 + 分集 vid（库里没有就现抓站点） |
 | GET | `/api/tracks?vid=` | 取播放档位，`best` 是最高可用档 |
 | POST | `/resolve` | 兼容客户端 `RemoteResolver`：客户端给 host/path/body，服务端签名后转发 |
