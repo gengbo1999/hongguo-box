@@ -274,6 +274,71 @@ def series_row(d):
     )
 
 
+# 站内搜索接口固定 10 条/页, 这里只取第一页补进全库结果; 缓存 5 分钟,
+# 避免用户每敲一个字都把请求打到站方。
+_WEB_SEARCH_TTL = 300
+_web_search_cache = {}
+_web_search_lock = threading.Lock()
+
+
+def search_row(vd):
+    """站内搜索的 video_data -> series 行(和 series_row 同形)。"""
+    tags = []
+    cats = vd.get("category_list")
+    if isinstance(cats, list):
+        tags = [_s(x.get("name")) for x in cats
+                if isinstance(x, dict) and _s(x.get("name"))]
+    return (
+        _s(vd.get("series_id")),
+        _s(vd.get("series_title")),
+        catalog.cover_hash(_s(vd.get("series_cover"))),
+        _s(vd.get("series_intro")),
+        _i(vd.get("episode_cnt")),
+        ",".join(tags),
+        "",
+        _i(vd.get("create_time")),
+    )
+
+
+def search_json(row):
+    """search_row 的 8 元组 -> 列表条目（series_json 只认 7 列）。"""
+    return catalog.series_json(row[:6] + (row[7],))
+
+
+def web_search(q, timeout=5):
+    """调站方 /api/search/result/，返回 (rows, total)。失败时返回空, 不影响本地搜索。"""
+    key = (q or "").strip()[:30]
+    if not key:
+        return [], 0
+    now = time.time()
+    with _web_search_lock:
+        hit = _web_search_cache.get(key)
+        if hit and now - hit[0] < _WEB_SEARCH_TTL:
+            return hit[1], hit[2]
+    url = f"{SITE}/api/search/result/?query={urllib.parse.quote(key)}"
+    rows, total = [], 0
+    try:
+        raw = http_text(url, timeout=timeout, headers={
+            "Referer": SITE + "/", "X-Xs-From-Web": "1"})
+        j = json.loads(raw)
+    except Exception as e:  # noqa: BLE001
+        print(f"[search] 站内搜索失败 {e!r}", flush=True)
+    else:
+        total = _i(j.get("totalCount"))
+        for item in (j.get("searchList") or []):
+            if not isinstance(item, dict) or _i(item.get("doc_type")) != 23:
+                continue
+            vd = item.get("video_data")
+            if not isinstance(vd, dict) or _i(vd.get("series_status")) != 1:
+                continue
+            row = search_row(vd)
+            if row[0] and row[1]:
+                rows.append(row)
+    with _web_search_lock:
+        _web_search_cache[key] = (now, rows, total)
+    return rows, total
+
+
 def crawl_category(slug, max_pages=8, budget=None):
     """按分类抓列表。返回新增/更新条数。"""
     total = 0
@@ -452,6 +517,29 @@ class Handler(BaseHTTPRequestHandler):
             q = (qs.get("q") or [""])[0].strip()
             off, lim = _page(qs, default_limit=30)
             r = catalog.search(conn(), q, offset=off, limit=lim)
+            if q and off == 0:
+                web_rows, web_total = web_search(q)
+                if web_rows:
+                    # 先落库，后续同一关键词就能直接走本地；详情调用会补齐 vids。
+                    upsert_many(web_rows)
+                    items, ids = [], set()
+                    # 站方结果按相关度排过序，先放进来；本地命中再去重合并。
+                    for it in [search_json(x) for x in web_rows] + r["items"]:
+                        if it["id"] not in ids:
+                            ids.add(it["id"])
+                            items.append(it)
+                    # 精确标题 > 前缀 > 包含，同级按更新时间倒序。
+                    def _rank(it):
+                        t = it.get("title") or ""
+                        if t == q:
+                            return 0
+                        if t.startswith(q):
+                            return 1
+                        return 2 if q in t else 3
+                    items.sort(key=lambda it: (_rank(it), -(it.get("created") or 0)))
+                    r["items"] = items[:lim]
+                    r["total"] = max(r["total"], web_total, len(items))
+                    r["next"] = off + len(r["items"])
             return self._send(200, {"ok": True, **r})
 
         if p == "/api/detail":
@@ -463,10 +551,13 @@ class Handler(BaseHTTPRequestHandler):
             row = conn().execute(sql, (sid,)).fetchone()
             vids = [v for v in (row[7] or "").split(",") if v] if row else []
             if not vids:
-                d, vids = fetch_detail(sid)
-                if d and not row:
+                d, fetched = fetch_detail(sid)
+                if d:
+                    # fetch_detail 会 upsert（包括已有行但 vids 为空的情况），
+                    # 这里必须重新查，否则 row[7] 的空串会把刚拿到的 vids 覆盖掉。
                     row = conn().execute(sql, (sid,)).fetchone()
-                    vids = [v for v in (row[7] or "").split(",") if v] if row else vids
+                    vids = ([v for v in (row[7] or "").split(",") if v]
+                            if row else fetched)
             if not row:
                 return self._send(404, {"ok": False, "error": "not_found"})
             series = catalog.series_json(row)
