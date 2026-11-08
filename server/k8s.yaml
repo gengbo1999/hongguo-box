@@ -60,8 +60,8 @@ spec:
             - {name: PORT, value: "8787"}
             - {name: HG_DB, value: /app/data/hongguo.db}
             - {name: HG_SEED_INDEX, value: /app/data/index.bin.z}
-            # 每 6 小时增量抓一次站点, 补新剧
-            - {name: HG_REFRESH_SEC, value: "21600"}
+            # 每小时增量抓一次站点, 补新剧
+            - {name: HG_REFRESH_SEC, value: "3600"}
             # 上游签名进程由 entrypoint 拉起并自动发现端口
             - {name: SIGNER_PORT, value: "0"}
             # 播放接口对「无会话」的请求回 200+0 字节, 有登录态才能过。
