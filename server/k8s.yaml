@@ -41,7 +41,7 @@ spec:
         # 注意: PVC 只能挂在一个路径上, 主容器挂在 /app/data, 所以这里也挂 /app/data,
         # 种子直接落到 PVC 里, 主容器第一次启动就能从 /app/data/index.bin.z 导入。
         - name: seed
-          image: crpi-p67sy5t6k9nsmste.cn-hangzhou.personal.cr.aliyuncs.com/gengbo/hongguo:v1.0.36
+          image: crpi-p67sy5t6k9nsmste.cn-hangzhou.personal.cr.aliyuncs.com/gengbo/hongguo:v1.0.38
           # 种子 22MB, 拷完才起服务
           command:
             - sh
@@ -52,7 +52,7 @@ spec:
             - {name: data, mountPath: /app/data}
       containers:
         - name: hongguo
-          image: crpi-p67sy5t6k9nsmste.cn-hangzhou.personal.cr.aliyuncs.com/gengbo/hongguo:v1.0.36
+          image: crpi-p67sy5t6k9nsmste.cn-hangzhou.personal.cr.aliyuncs.com/gengbo/hongguo:v1.0.38
           imagePullPolicy: Always
           ports:
             - {name: http, containerPort: 8787}
