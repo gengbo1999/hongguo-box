@@ -949,6 +949,9 @@ private struct ScrubBar: View {
                     TrackCache.shared.put(episode.vid, tracks)
                 }
                 if tracks.isEmpty {
+                    if PlayerAPI.lastFailure == "encrypted" {
+                        status = "该集为加密片源，暂不支持播放"; failed = true; return
+                    }
                     status = "该集暂无片源"; failed = true; return
                 }
             }

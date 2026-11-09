@@ -23,6 +23,8 @@ import Foundation
 ///    仍并发探测全部档位，哪天上高清就自动用上。走到这一步会把
 ///    「为什么没有高清」只写进 `VideoTrack.note` 供日志排查，不在画面上显示降级提示。
 enum PlayerAPI {
+    /// 最近一次取流被服务端拒绝的原因（如 encrypted），供界面提示用。
+    static var lastFailure: String?
     // MARK: - 请求 profile
 
     /// 一套完整的取流请求特征（host + 查询串 + 请求头）
@@ -360,7 +362,12 @@ enum PlayerAPI {
                 ua: ua,
                 headers: Dictionary(p.headers, uniquingKeysWith: { a, _ in a })
             )
-            guard let r = await RemoteResolver.resolve(spec), r.ok else { continue }
+            guard let r = await RemoteResolver.resolve(spec) else { continue }
+            if !r.ok {
+                // 服务端明确说这集是加密片源时，把这句透给界面，别再笼统说「暂无片源」
+                if let e = r.error { lastFailure = e }
+                continue
+            }
             let tracks = RemoteResolver.parseTracks(r)
             guard !tracks.isEmpty else { continue }
             out = tracks.map { t in
@@ -506,6 +513,7 @@ enum PlayerAPI {
 
     /// 原始取流：网关 → 批量 → 单条 → 公网明文，保留所有档位。
     private static func fetchAllTracks(for vid: String) async -> [VideoTrack] {
+        lastFailure = nil
         var reasons: [String] = []
         // 0) 抖音来源：服务端 `/api/tracks?dy=1` 已缓存该集时直接给直链；
         //    非抖音 vid 会立刻返回 ok:false，不额外打红果上游。
