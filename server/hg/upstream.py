@@ -368,6 +368,16 @@ def pick_best(tracks):
 _JS_SCRIPT = os.environ.get("HG_JS_VIDEO", "/app/sign/js/video_model.cjs")
 _JS_CACHE = {}
 _JS_TTL = 300
+
+# 落盘缓存钩子（由 app.py 注册到 SQLite）。进程内缓存只活 5 分钟、
+# 且随 pod 重启清空；而冷启动一次 js_video_model 要 6-7 秒，
+# 客户端 /resolve 超时只有 8 秒，正好卡在边缘 —— 必须把结果落盘，
+# 让重启后第一次取流也是毫秒级，否则用户会间歇性「播不了」。
+_CACHE_HOOKS = {"get": None, "put": None}
+
+
+def set_cache_hooks(get, put):
+    _CACHE_HOOKS["get"], _CACHE_HOOKS["put"] = get, put
 _JS_CACHE_MAX = 256
 
 
@@ -386,6 +396,17 @@ def js_video_model(vid, timeout=25):
     hit = _JS_CACHE.get(str(vid))
     if hit and now - hit[0] < _JS_TTL:
         return hit[1]
+    # 进程内未命中, 看落盘缓存(跨 pod 重启仍有效)
+    getter = _CACHE_HOOKS["get"]
+    if getter:
+        try:
+            cached = getter(str(vid))
+        except Exception:  # noqa: BLE001 缓存坏了就当没有
+            cached = None
+        if cached is not None:
+            with _lock:
+                _JS_CACHE[str(vid)] = (now, cached)
+            return cached
     script = _JS_SCRIPT
     if not os.path.isfile(script):
         raise UpstreamError("js_missing", script)
@@ -416,6 +437,12 @@ def js_video_model(vid, timeout=25):
         if len(_JS_CACHE) >= _JS_CACHE_MAX:
             _JS_CACHE.clear()
         _JS_CACHE[str(vid)] = (now, payload)
+    putter = _CACHE_HOOKS["put"]
+    if putter:
+        try:
+            putter(str(vid), payload)
+        except Exception:  # noqa: BLE001 写缓存失败不影响返回
+            pass
     return payload
 
 

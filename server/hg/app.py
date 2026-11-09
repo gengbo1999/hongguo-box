@@ -77,6 +77,41 @@ def db_set_meta(k, v):
     c.commit()
 
 
+# 取流结果落盘缓存。进程内 _JS_CACHE 只活 5 分钟且随 pod 重启清空，
+# 冷启动一次 js_video_model 要 6-7 秒，而客户端 /resolve 超时 8 秒 ——
+# 正好卡在边缘，于是同一集会出现「刚才能播、现在播不了」。落盘后
+# 重启后的第一次取流也是毫秒级。
+VM_TTL = 1500
+
+
+def _vm_cache_get(vid):
+    row = conn().execute("SELECT payload, updated FROM vm_cache WHERE vid=?",
+                         (str(vid),)).fetchone()
+    if not row or int(time.time()) - int(row["updated"] or 0) > VM_TTL:
+        return None
+    try:
+        return json.loads(row["payload"])
+    except ValueError:
+        return None
+
+
+def _vm_cache_put(vid, payload):
+    try:
+        with _db_lock:
+            c = conn()
+            c.execute(
+                """INSERT INTO vm_cache(vid,payload,updated) VALUES(?,?,?)
+                   ON CONFLICT(vid) DO UPDATE SET payload=excluded.payload,
+                     updated=excluded.updated""",
+                (str(vid), json.dumps(payload, ensure_ascii=False), int(time.time())))
+            c.commit()
+    except Exception as e:  # noqa: BLE001 缓存写失败不影响取流
+        print(f"[cache] 写失败 {e!r}", flush=True)
+
+
+upstream.set_cache_hooks(_vm_cache_get, _vm_cache_put)
+
+
 def upsert_many(rows):
     """rows: (sid,title,cover,intro,eps,tags,vids,created)"""
     c = conn()
@@ -446,7 +481,12 @@ def recheck_pending(limit=2000):
         if keys & existing:
             matched.append(r["sid"])
         elif int(r["created"] or 0) <= cutoff:
-            promote_rows.append(("dy:" + r["sid"], (r["title"] or "").strip(), "",
+            # dy_pending.sid 由 ingest_douyin.py 写入时已带 "dy:" 前缀，
+            # 这里再拼一次就会出现 dy:dy:...（详情页 404）。
+            sid = str(r["sid"] or "")
+            if not sid.startswith("dy:"):
+                sid = "dy:" + sid
+            promote_rows.append((sid, (r["title"] or "").strip(), "",
                                  "", "[]", "[]", int(r["eps"] or 0), int(r["created"] or 0),
                                  now, "dy"))
             promoted.append(r["sid"])

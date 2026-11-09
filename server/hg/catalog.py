@@ -72,6 +72,10 @@ SCHEMA = (
         sid TEXT PRIMARY KEY, title TEXT DEFAULT '', real_name TEXT DEFAULT '',
         eps INTEGER DEFAULT 0, created INTEGER DEFAULT 0,
         first_seen INTEGER DEFAULT 0, checked INTEGER DEFAULT 0)""",
+    # 取流结果落盘缓存: 冷启动一次 js_video_model 要 6-7 秒, 客户端 /resolve
+    # 超时 8 秒, 不落盘就会间歇性「播不了」。TTL 由 app.py 控制(1500s)。
+    """CREATE TABLE IF NOT EXISTS vm_cache(
+        vid TEXT PRIMARY KEY, payload TEXT NOT NULL, updated INTEGER DEFAULT 0)""",
 )
 
 PUNCT = re.compile(r'[，。！？、：；""\'\'（）()\[\]【】·.…—\-_,!?:;"\']')

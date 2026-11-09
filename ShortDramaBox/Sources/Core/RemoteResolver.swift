@@ -15,7 +15,7 @@ import Foundation
 /// 安全设计：
 ///   - 默认指向官方服务器 `defaultBase`，开箱即用；
 ///   - 填 `resolver_base` 可以换地址（自建），填空串则整体关掉远端；
-///   - 超时 8 秒，比本地直连的 20 秒短，失败时能及时回退；
+///   - 超时 25 秒，冷启动也能等到结果；失败时仍回退本地直连；
 ///   - 任何一步失败都静默返回 nil，调用方自然回退本地直连。
 /// 所以打开它不会让现状变差。
 enum RemoteResolver {
@@ -73,7 +73,11 @@ enum RemoteResolver {
         let error: String?
     }
 
-    static let timeout: TimeInterval = 8
+    /// 冷启动一次取流要 6–7 秒（服务端跑 JS 签名 + 上游往返），
+    /// 原来 8 秒正好卡在边缘，网络稍慢就超时 → 回退到已失效的本地直连，
+    /// 表现为「刚才还能播，现在播不了」。服务端现在有落盘缓存，
+    /// 正常情况下第一次之后都是毫秒级，这里给足余量。
+    static let timeout: TimeInterval = 25
 
     // MARK: - 调用
 
