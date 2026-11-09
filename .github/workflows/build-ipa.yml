@@ -1,8 +1,11 @@
 name: Build unsigned IPA
 
+# 只监听 App 自身改动：server/**、README、脚本等不会触发 iOS 打包。
 on:
   push:
     branches: [ main, master ]
+    paths:
+      - "ShortDramaBox/**"
   workflow_dispatch:
 
 permissions:

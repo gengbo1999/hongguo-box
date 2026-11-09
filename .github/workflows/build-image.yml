@@ -1,11 +1,21 @@
 name: server-image
 
-# 只有打 v* 标签才构建服务端镜像, 避免和 build-ipa.yml 的 push 触发重复跑。
+# 服务端代码/镜像相关改动推 main 自动构建并部署，不再依赖 v* 标签；
+# 这样 iOS 发版 tag 不会误触发服务端镜像，App 改动也不会触发服务端部署。
+# 需要手动发服务端版本时，推 server-v* 标签或走 workflow_dispatch。
 # 首次上线前需要在 k3s-master 上先 apply 一次清单:
 #   kubectl apply -f server/k8s.yaml
 on:
   push:
-    tags: ["v*"]
+    branches: [ main ]
+    paths:
+      - "server/hg/**"
+      - "server/sign/**"
+      - "server/resolver/**"
+      - "server/Dockerfile"
+      - "server/entrypoint.sh"
+      - "server/k8s.yaml"
+    tags: ["server-v*"]
   workflow_dispatch:
     inputs:
       tag:
@@ -34,8 +44,10 @@ jobs:
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             echo "tag=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
-          else
+          elif [ "${GITHUB_REF_TYPE}" = "tag" ]; then
             echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=sha-$(git rev-parse --short=12 HEAD)" >> "$GITHUB_OUTPUT"
           fi
 
       - name: 检查签名材料
@@ -110,7 +122,7 @@ jobs:
           key: ${{ secrets.K3S_SSH_KEY }}
           script: |
             set -e
-            IMAGE="${{ env.IMAGE }}:${{ needs.build.outputs.tag || github.ref_name }}"
+            IMAGE="${{ env.IMAGE }}:${{ needs.build.outputs.tag }}"
             if ! kubectl -n ${{ env.NAMESPACE }} get deployment ${{ env.APP }} >/dev/null 2>&1; then
               echo "deployment/${{ env.APP }} 不存在, 请先执行: kubectl apply -f server/k8s.yaml"
               exit 1

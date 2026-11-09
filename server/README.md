@@ -90,14 +90,18 @@ git show 4e4e266^:ShortDramaBox/Sources/Resources/index.bin.z > server/seed/inde
 kubectl apply -f server/k8s.yaml
 kubectl -n dev get ingress hongguo     # hongguo.gengbo.top
 
-# 之后靠 CI：本地手推一个 v* 标签（build-image.yml 只认 tag push）
-git tag v1.0.30 && git push origin v1.0.30
+# 之后：server 代码路径推 main 会自动构建、推送并滚动更新 dev
+# 手动发服务端版本：推 server-v* 标签，或在 Actions 里 workflow_dispatch
+git tag server-v1.0.1 && git push origin server-v1.0.1
 ```
 
 注意两点：
 
-- `build-ipa.yml` 自己也会打 `v*` 标签，但用 `GITHUB_TOKEN` 推的标签**不会再触发**别的
-  workflow，所以发版还得本地手推。它同时只保留最新一个 release/tag，别指望旧标签一直在。
+- 服务端镜像只监听 `server/hg/**`、`server/sign/**`、`server/resolver/**`、`server/Dockerfile`、
+  `server/entrypoint.sh`、`server/k8s.yaml` 这些路径，以及 `server-v*` 标签；不再监听 `v*`。
+  iOS 发版标签不会触发服务端构建，`build-ipa.yml` 用 `GITHUB_TOKEN` 推的标签也不会再触发别的 workflow。
+- 改 workflow 文件本身不会自动跑；要验证 CI 配置，用 Actions 里的 `workflow_dispatch` 手动触发。
+- `build-ipa.yml` 同时只保留最新一个 release/tag，别指望旧标签一直在。
 - 种子索引 `server/seed/index.bin.z` 被 `.gitignore` 排除，CI 里由 `取种子索引` 那步从
   历史提交 `4e4e266^` 取回（checkout 要用全量 clone）。漏了这步镜像就是空库，
   起来 `/healthz` 会报 `series:0`。

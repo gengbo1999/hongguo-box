@@ -109,8 +109,10 @@ cd ShortDramaBox
 MARKETING_VERSION=1.0.0 ./make-ipa.sh    # 产物：ShortDramaBox-unsigned.ipa
 ```
 
-仓库自带 GitHub Actions 工作流（`.github/workflows/build-ipa.yml`）：每次推送到 `main` 都会自动跑单元测试、
-打未签名 IPA、发布 Release，并把历史 Release 和 tag 清掉只留最新。
+仓库自带两个 GitHub Actions 工作流，按改动路径触发：
+
+- `.github/workflows/build-ipa.yml`：只有 `ShortDramaBox/**`（App 代码、工程、测试）推到 `main` 时，才跑单元测试、打未签名 IPA、发布 Release，并清理历史 Release/tag；只改 `server/**` 或文档不会出包。
+- `.github/workflows/build-image.yml`：只有 `server/hg/**`、`server/sign/**`、`server/resolver/**`、`server/Dockerfile`、`server/entrypoint.sh`、`server/k8s.yaml` 推到 `main` 时，才构建并部署服务端镜像；iOS 的 `v*` 标签不会误触发。
 
 环境要求：macOS + Xcode 15.4 或更高；工程最低支持 iOS 17.0，设备族群仅 iPhone。
 单元测试跑在 iOS 模拟器上，可以在 Xcode 里直接 `⌘U`。
