@@ -944,18 +944,18 @@ private struct ScrubBar: View {
                 if let hit = TrackCache.shared.cached(episode.vid) {
                     tracks = hit
                 } else {
-                    // 只取 1080p；低档位不再作为兜底
+                    // 拿服务端给的全部档位，播放时取最高可用档
                     tracks = await PlayerAPI.allTracks(for: episode.vid)
                     TrackCache.shared.put(episode.vid, tracks)
                 }
                 if tracks.isEmpty {
-                    status = "该集暂无 1080p 片源"; failed = true; return
+                    status = "该集暂无片源"; failed = true; return
                 }
             }
             guard gen == loadGen else { return }
             onTracks(tracks)
             guard let best = PlayerAPI.pick(tracks, force: forceQuality) else {
-                status = "无 1080p 档位"; failed = true; return
+                status = "无可用档位"; failed = true; return
             }
             HGLog.i("播放", "第 \(episode.index) 集 选中 \(best.definition)（候选 \(tracks.count) 档，" + (PlayerAPI.needsTranscode(best) ? "需本机转码" : "可直接播") + "）")
             onQuality(best.definition)
