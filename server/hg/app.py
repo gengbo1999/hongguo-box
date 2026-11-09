@@ -547,6 +547,36 @@ def _dy_url_rank(url):
     return 1
 
 
+def _dy_probe_size(url, timeout=6):
+    """Range 拉 mp4 头部解析 tkhd，返回真实 (w, h)；失败返回 (0, 0)。
+
+    抖音 `video.play` 是"默认清晰度"，和 `video.bit_rate` 的档位不一定对应，
+    顶层 width/height 又是竖屏最大尺寸，直接拿来标档位会虚标（实测 play 是
+    720x1280 却被标成 1080p）。这里实测一次，按真实分辨率入档。
+    """
+    try:
+        req = urllib.request.Request(url, headers={
+            "User-Agent": ("AppleCoreMedia/1.0 (iPhone; U; CPU OS 18_0 like Mac OS X)"),
+            "Range": "bytes=0-600000",
+            "Accept-Encoding": "identity",
+        })
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            buf = r.read(600000)
+    except Exception:
+        return 0, 0
+    best = (0, 0)
+    i = buf.find(b"tkhd")
+    while i != -1:
+        box = i - 4  # tkhd 前 4 字节是 box size
+        if box >= 0 and box + 92 <= len(buf):
+            w, h = struct.unpack(">II", buf[box + 84:box + 92])
+            w, h = w >> 16, h >> 16
+            if 0 < w <= 8192 and 0 < h <= 8192 and w * h > best[0] * best[1]:
+                best = (w, h)
+        i = buf.find(b"tkhd", i + 4)
+    return best
+
+
 def _dy_plays(video):
     """把一个抖音 video 对象摊平成 [{url,h,w,br,gear}]，按分辨率降序去重。
 
@@ -574,18 +604,24 @@ def _dy_plays(video):
                     "short": min(int(w or w0), int(h or h0)) or short0,
                     "br": int(br or 0), "gear": gear or "", "rank": rank(url)})
 
-    # 有 bit_rate 档位时只信档位：`play` 是默认清晰度（实测 720x1280 会被误标成
-    # 1080p，因为顶层 width/height 是竖屏最大尺寸），没有档位时才拿它兜底。
+    # `play`/`play_h264` 是默认清晰度，档位标签必须实测（见 _dy_probe_size）；
+    # 探不到尺寸时才在完全没有 bit_rate 档位的情况下按顶层尺寸兜底。
     gears = video.get("bit_rate") or []
-    if not gears:
-        for u in video.get("play") or []:
-            add(u, w0, h0, 0, "default")
-        for u in video.get("play_h264") or []:
-            add(u, w0, h0, 0, "h264")
+    probed = (0, 0)
+    for key, gear_name in (("play", "default"), ("play_h264", "h264")):
+        for u in video.get(key) or []:
+            if not probed[0]:
+                pw, ph = _dy_probe_size(u)
+                if pw and ph:
+                    probed = (pw, ph)
+            add(u, probed[0], probed[1], 0, gear_name)
     for b in gears:
         for u in b.get("urls") or []:
             add(u, b.get("w") or w0, b.get("h") or h0, b.get("bit_rate"),
                 b.get("gear"))
+    # -web 域不带 Referer 会 403（AVPlayer 不发 Referer）：只要有 weba 就只留 weba
+    if any(t["rank"] == 0 for t in out):
+        out = [t for t in out if t["rank"] == 0]
     out.sort(key=lambda t: (-(t["short"] or 0), t["rank"]))
     return out
 
