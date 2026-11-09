@@ -181,7 +181,7 @@ def episodes(sid, max_episodes=500):
     out, seen, cursor = [], set(), 0
     while len(out) < max_episodes:
         d = _call("/aweme/v1/web/series/aweme/",
-                  f"{COMMON}&series_id={sid}&pull_type=2&cursor={cursor}&count=20")
+                  f"{COMMON}&series_id={sid}&pull_type=2&cursor={cursor}&count=100")
         lst = d.get("aweme_list") or []
         if not lst:
             break

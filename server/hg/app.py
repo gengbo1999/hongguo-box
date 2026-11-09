@@ -578,7 +578,7 @@ def _dy_probe_size(url, timeout=6):
     return best
 
 
-def _dy_plays(video):
+def _dy_plays(video, probe=True):
     """把一个抖音 video 对象摊平成 [{url,h,w,br,gear}]，按分辨率降序去重。
 
     注意抖音同一档位会给多条 CDN 链接：`*-weba.douyinvod.com` **不带 Referer 也能拉**
@@ -597,12 +597,16 @@ def _dy_plays(video):
             return 9  # 302 跳板，别用
         return 1
 
-    def add(url, w, h, br, gear):
+    def add(url, w, h, br, gear, fallback=True):
         if not url or url in seen or rank(url) >= 9:
             return
         seen.add(url)
-        out.append({"url": url, "w": int(w or w0), "h": int(h or h0),
-                    "short": min(int(w or w0), int(h or h0)) or short0,
+        # fallback=False 用于未探测的 play 档：宁可留 0（播放时补探），
+        # 也不能拿顶层 width/height 冒充分辨率（那正是之前 720p 被标成 1080p 的原因）
+        ww = int(w or (w0 if fallback else 0))
+        hh = int(h or (h0 if fallback else 0))
+        out.append({"url": url, "w": ww, "h": hh,
+                    "short": min(ww, hh) if ww and hh else 0,
                     "br": int(br or 0), "gear": gear or "", "rank": rank(url)})
 
     # `play`/`play_h264` 是默认清晰度，档位标签必须实测（见 _dy_probe_size）；
@@ -611,11 +615,11 @@ def _dy_plays(video):
     probed = (0, 0)
     for key, gear_name in (("play", "default"), ("play_h264", "h264")):
         for u in video.get(key) or []:
-            if not probed[0]:
+            if probe and not probed[0]:
                 pw, ph = _dy_probe_size(u)
                 if pw and ph:
                     probed = (pw, ph)
-            add(u, probed[0], probed[1], 0, gear_name)
+            add(u, probed[0], probed[1], 0, gear_name, fallback=bool(probe))
     for b in gears:
         for u in b.get("urls") or []:
             add(u, b.get("w") or w0, b.get("h") or h0, b.get("bit_rate"),
@@ -822,9 +826,9 @@ class Handler(BaseHTTPRequestHandler):
         """拉整部剧集并写 dy_ep 缓存, 返回缓存行。"""
         eps = douyin.episodes(sid)
         now = int(time.time())
-        # 每集要 Range 探一次真实分辨率，串行 40+ 集会超过客户端超时，开小并发
-        with ThreadPoolExecutor(max_workers=8) as pool:
-            plays = list(pool.map(lambda e: _dy_plays(e.get("video") or {}), eps))
+        # 这里不探分辨率（每集一条 0.6MB Range，100 集要 60MB）：
+        # play 兜底档的宽高留到真正播放该集时在 _douyin_tracks 里补探。
+        plays = [_dy_plays(e.get("video") or {}, probe=False) for e in eps]
         rows = [(e["vid"], sid, e["ep"],
                  (e.get("video") or {}).get("duration_ms") or 0,
                  (e.get("video") or {}).get("width") or 0,
@@ -874,6 +878,9 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e:
                 return self._send(502, {"ok": False, "error": "douyin_episodes",
                                         "detail": str(e)[:200]})
+            if not eps:
+                # 剧下架/需要登录时抖音返回空列表：明确告诉客户端，别给空壳 200
+                return self._send(404, {"ok": False, "error": "no_episodes"})
         row = conn().execute(
             "SELECT sid,title,cover,intro,eps,tags,created,source FROM series WHERE sid=?",
             (pub,)).fetchone()
@@ -890,9 +897,11 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(404, {"ok": False, "error": "not_found"})
         try:
             cached = json.loads(row["plays"] or "[]") if row["plays"] else []
-            # 老缓存里没有 w/h、或者全是必须带 Referer 的 -web 链接，都当脏数据重拉
-            fresh = bool(cached) and all(int(t.get("w") or 0) > 0 for t in cached) \
-                and any("weba" in (t.get("url") or "") for t in cached)
+            # 脏数据只认两种：没有 weba 链接（带 -web 的会 403）、或带 rank≠0 的旧记录。
+            # play 兜底档的 w/h 允许为 0 —— 那是留给播放时按集补探的，不算脏。
+            fresh = bool(cached) \
+                and any("weba" in (t.get("url") or "") for t in cached) \
+                and all(int(t.get("rank") or 0) == 0 for t in cached)
             if fresh and now - (row["updated"] or 0) > 600:
                 # 过期但还有可用缓存：先回旧档位，后台刷新，别让客户端等 15s
                 threading.Thread(target=self._douyin_fetch_eps, args=(sid,),
@@ -910,8 +919,20 @@ class Handler(BaseHTTPRequestHandler):
         ep = next((e for e in eps if e["vid"] == vid), None)
         if not ep:
             return self._send(404, {"ok": False, "error": "not_found"})
+        plays = json.loads(ep["plays"] or "[]")
+        # 缓存里 play 兜底档的宽高没探过（拉目录时不探，省流量）——只在真正播这一集时补探
+        blind = [t for t in plays if int(t.get("short") or 0) <= 0][:4]
+        if blind:
+            with ThreadPoolExecutor(max_workers=4) as pool:
+                dims = list(pool.map(lambda t: _dy_probe_size(t.get("url") or ""), blind))
+            for t, (pw, ph) in zip(blind, dims):
+                if pw and ph:
+                    t["w"], t["h"] = pw, ph
+                    t["short"] = min(pw, ph)
+        plays.sort(key=lambda t: (-(int(t.get("short") or 0)),
+                                  int(t.get("rank") or 0)))
         tracks, seen = [], set()
-        for t in json.loads(ep["plays"] or "[]"):
+        for t in plays:
             url = t.get("url") or ""
             if not url or url in seen:
                 continue
