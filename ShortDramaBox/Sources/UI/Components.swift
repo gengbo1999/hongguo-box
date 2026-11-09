@@ -55,6 +55,9 @@ struct PosterCard: View {
                 }
                 .frame(width: width, height: width * 4 / 3)
                 .clipShape(RoundedRectangle(cornerRadius: 10))
+                .overlay(alignment: .topLeading) {
+                    SourceBadge(series: series).padding(5)
+                }
                 if let t = progressText ?? (series.rightText.isEmpty ? nil : series.rightText) {
                     Text(t).font(.system(size: 10, weight: .semibold))
                         .padding(.horizontal, 5).padding(.vertical, 2)
@@ -70,6 +73,58 @@ struct PosterCard: View {
     }
 }
 
+
+
+// MARK: - 来源标记
+
+extension Series {
+    /// 归一化来源：老数据没有 source 字段，按 id 前缀兜底。
+    var sourceKind: String {
+        if !source.isEmpty { return source }
+        if id.hasPrefix("dy:") { return "dy" }
+        return "hg"
+    }
+
+    var sourceName: String {
+        switch sourceKind {
+        case "dy": return "抖音"
+        default: return "红果"
+        }
+    }
+
+    var sourceSymbol: String {
+        switch sourceKind {
+        case "dy": return "music.note"
+        default: return "play.rectangle.fill"
+        }
+    }
+
+    var sourceTint: Color {
+        switch sourceKind {
+        case "dy": return Color(red: 0.10, green: 0.78, blue: 0.85)
+        default: return Color(red: 0.95, green: 0.35, blue: 0.25)
+        }
+    }
+}
+
+/// 封面/详情用的小标签：图标 + 文字，一眼区分红果 / 抖音。
+struct SourceBadge: View {
+    let series: Series
+    var fontSize: CGFloat = 9
+
+    var body: some View {
+        HStack(spacing: 2) {
+            Image(systemName: series.sourceSymbol)
+                .font(.system(size: fontSize - 1, weight: .bold))
+            Text(series.sourceName)
+                .font(.system(size: fontSize, weight: .semibold))
+        }
+        .foregroundStyle(.white)
+        .padding(.horizontal, 5).padding(.vertical, 2)
+        .background(series.sourceTint.opacity(0.92))
+        .clipShape(Capsule())
+    }
+}
 
 /// 选集档位缓存 + 批量预取。
 ///

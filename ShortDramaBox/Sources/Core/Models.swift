@@ -9,6 +9,9 @@ struct Series: Identifiable, Hashable, Codable {
     var accessibleCount: Int = 0
     var rightText: String = ""
     var tags: [String] = []
+    /// 来源：hg=红果（默认） dy=抖音；老数据为空，按 id 前缀兜底。
+    /// 列表卡片和详情页据此显示来源徽标（图标+文字），避免混池后分不清出处。
+    var source: String = ""
 }
 
 struct Episode: Identifiable, Hashable {

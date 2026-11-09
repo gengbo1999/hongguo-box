@@ -141,6 +141,7 @@ enum CatalogAPI {
             s.intro = asStr(d["intro"])
             s.episodeCount = asInt(d["eps"])
             s.tags = asArr(d["tags"]).map { asStr($0) }.filter { !$0.isEmpty }
+            s.source = asStr(d["source"])
             return s
         }
     }

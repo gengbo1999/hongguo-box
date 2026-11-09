@@ -310,11 +310,14 @@ enum PlayerAPI {
     ///
     /// 非抖音 vid 服务端会立刻回 `ok:false`，所以对红果集只是一次本地快速探测，
     /// 不会拖慢正常链路（6s 超时兜底）。
-    static func douyinTracks(_ vid: String) async -> [VideoTrack] {
+    /// 服务端已缓存的档位（抖音）。`dy=1` 让服务端对非抖音 vid 立刻返回
+    /// not_dy，避免误打红果上游。
+    static func serverTracks(_ vid: String, dy: Bool) async -> [VideoTrack] {
         guard RemoteResolver.isEnabled, let root = RemoteResolver.base,
               var comps = URLComponents(string: root + "/api/tracks") else { return [] }
-        comps.queryItems = [URLQueryItem(name: "vid", value: vid),
-                            URLQueryItem(name: "dy", value: "1")]
+        comps.queryItems = dy
+            ? [URLQueryItem(name: "vid", value: vid), URLQueryItem(name: "dy", value: "1")]
+            : [URLQueryItem(name: "vid", value: vid)]
         guard let url = comps.url else { return [] }
 
         var req = URLRequest(url: url)
@@ -514,7 +517,7 @@ enum PlayerAPI {
         var reasons: [String] = []
         // 0) 抖音来源：服务端 `/api/tracks?dy=1` 已缓存该集时直接给直链；
         //    非抖音 vid 会立刻返回 ok:false，不额外打红果上游。
-        let dy = await douyinTracks(vid)
+        let dy = await serverTracks(vid, dy: true)
         if !dy.isEmpty { return sorted(dy) }
         // 1) 服务端签名网关（当前唯一能稳定拿 1080p 的路径）
         let remote = await remoteTracks(vid)

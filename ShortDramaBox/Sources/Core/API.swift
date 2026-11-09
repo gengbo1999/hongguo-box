@@ -118,8 +118,10 @@ enum Catalog {
 
 
     static func detail(_ seriesId: String) async throws -> (Series, [Episode]) {
-        // `dy:` 是抖音来源（红果站内没有），详情与剧集必须问自建服务端
-        if seriesId.hasPrefix("dy:") { return try await serverDetail(seriesId) }
+        // `dy:`（抖音）红果站内没有，详情与剧集必须问自建服务端
+        if seriesId.hasPrefix("dy:") {
+            return try await serverDetail(seriesId)
+        }
         guard let j = routerJSON(try await friendlyGet("\(base)/detail?series_id=\(seriesId)", what: "该短剧不存在或已下架")) else { throw ApiError.noData }
         let sd = asDict(asDict(asDict(j["loaderData"])["detail_page"])["seriesDetail"])
         var s = seriesFrom(sd)
@@ -155,7 +157,10 @@ enum Catalog {
         s.intro = asStr(d["intro"])
         s.episodeCount = asInt(d["eps"])
         s.tags = asArr(d["tags"]).map { asStr($0) }
-        if s.title.isEmpty { s.title = "抖音短剧" }
+        s.source = asStr(d["source"])
+        if s.title.isEmpty {
+            s.title = "抖音短剧"
+        }
 
         let eps: [Episode] = asArr(obj["episodes"]).compactMap { raw in
             let e = asDict(raw)

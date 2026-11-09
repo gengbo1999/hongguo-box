@@ -58,8 +58,11 @@ struct DetailView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 10))
             VStack(alignment: .leading, spacing: 6) {
                 Text(detail.title).font(.headline)
-                Text("共 \(max(detail.episodeCount, episodes.count)) 集")
-                    .font(.system(size: 12)).foregroundStyle(.secondary)
+                HStack(spacing: 6) {
+                    SourceBadge(series: detail, fontSize: 10)
+                    Text("共 \(max(detail.episodeCount, episodes.count)) 集")
+                        .font(.system(size: 12)).foregroundStyle(.secondary)
+                }
                 if !detail.tags.isEmpty {
                     Text(detail.tags.prefix(4).joined(separator: " · "))
                         .font(.system(size: 11)).foregroundStyle(.pink.opacity(0.9))
