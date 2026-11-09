@@ -574,11 +574,15 @@ def _dy_plays(video):
                     "short": min(int(w or w0), int(h or h0)) or short0,
                     "br": int(br or 0), "gear": gear or "", "rank": rank(url)})
 
-    for u in video.get("play") or []:
-        add(u, w0, h0, 0, "default")
-    for u in video.get("play_h264") or []:
-        add(u, w0, h0, 0, "h264")
-    for b in video.get("bit_rate") or []:
+    # 有 bit_rate 档位时只信档位：`play` 是默认清晰度（实测 720x1280 会被误标成
+    # 1080p，因为顶层 width/height 是竖屏最大尺寸），没有档位时才拿它兜底。
+    gears = video.get("bit_rate") or []
+    if not gears:
+        for u in video.get("play") or []:
+            add(u, w0, h0, 0, "default")
+        for u in video.get("play_h264") or []:
+            add(u, w0, h0, 0, "h264")
+    for b in gears:
         for u in b.get("urls") or []:
             add(u, b.get("w") or w0, b.get("h") or h0, b.get("bit_rate"),
                 b.get("gear"))
