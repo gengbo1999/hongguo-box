@@ -484,7 +484,11 @@ def refresh_loop():
 
 
 def fetch_detail(sid):
-    j = router_json(http_text(f"{SITE}/detail?series_id={urllib.parse.quote(sid)}"))
+    try:
+        j = router_json(http_text(f"{SITE}/detail?series_id={urllib.parse.quote(sid)}"))
+    except Exception as e:  # 红果对未知 sid 会回 500，别让它把请求线程打崩
+        print(f"[detail] {sid!r} 上游失败 {e!r}", flush=True)
+        return None, []
     if not j:
         return None, []
     ld = j.get("loaderData") or {}
