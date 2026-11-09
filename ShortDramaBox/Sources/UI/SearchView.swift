@@ -1,13 +1,9 @@
 import SwiftUI
 
-/// 搜索 = 服务端全库（片名包含匹配）＋ 站内搜索（拿得到就并进来）。
+/// 搜索 = 服务端全库（片名包含匹配）。
 ///
-/// 全库这份是我们自己的：服务端索引了站方全部剧集，按片名做包含匹配，
-/// 冷门老剧也搜得到；代价是只认片名，tag、简介、演员都不参与。
-///
-/// 站内那份按站方相关度排序，本来算个补充，但现在站方把搜索页改成前端渲染，
-/// 客户端拿不到它返回的数据了 —— 所以只当可选补充，失败就静默降级，
-/// 界面上提一句「站内暂时拿不到」，全库结果照旧。
+/// 服务端索引了站方全部剧集（含抖音补充源），按片名做包含匹配，冷门老剧也搜得到；
+/// 站方自己的搜索页是前端渲染的，客户端拿不到数据，所以不再直连站内搜索。
 ///
 /// 同名各季是独立剧集（标题带「第N季」），会一起返回。
 struct SearchView: View {
@@ -22,13 +18,6 @@ struct SearchView: View {
     @State private var loadingIndex = true
     @State private var localTask: Task<Void, Never>?
 
-    // 站内搜索
-    @State private var remote: [Series] = []
-    @State private var remoteTotal = 0
-    @State private var remoteNote = ""
-    @State private var remoteBusy = false
-    @State private var remoteTask: Task<Void, Never>?
-
     /// 全库一页前端最多展示多少条（服务端单次上限 100）
     private static let localLimit = 100
 
@@ -39,8 +28,6 @@ struct SearchView: View {
         guard !k.isEmpty else { return [] }
         var out: [Series] = []
         var ids = Set<String>()
-        // 站内结果按站方相关度在前，全库结果补充在后
-        for s in remote where ids.insert(s.id).inserted { out.append(s) }
         for s in local where ids.insert(s.id).inserted { out.append(s) }
         return out
     }
@@ -137,8 +124,8 @@ struct SearchView: View {
 
     private var searchingState: some View {
         VStack(spacing: 10) {
-            if remoteBusy || localTask != nil { ProgressView() }
-            Text(remoteBusy || localTask != nil
+            if localTask != nil { ProgressView() }
+            Text(localTask != nil
                  ? "正在搜索…"
                  : "没有找到「\(keyword)」\n换个片名试试")
                 .font(.system(size: 12)).foregroundStyle(.secondary)
@@ -149,9 +136,6 @@ struct SearchView: View {
     private var noteBar: some View {
         VStack(spacing: 2) {
             Text(summary).font(.system(size: 11)).foregroundStyle(.secondary)
-            if !remoteNote.isEmpty {
-                Text(remoteNote).font(.system(size: 10)).foregroundStyle(.tertiary)
-            }
         }
         .frame(maxWidth: .infinity).padding(.vertical, 5)
         .background(.ultraThinMaterial)
@@ -161,10 +145,9 @@ struct SearchView: View {
         var parts: [String] = []
         if localTotal > 0 {
             parts.append("全库命中 \(localTotal) 部")
-            if local.count < localTotal { parts.append("显示前 \(local.count) 部") }
+            if localTotal > Self.localLimit { parts.append("显示前 \(Self.localLimit) 部") }
         }
-        if remoteTotal > 0 { parts.append("站内另有 \(remoteTotal) 部") }
-        if parts.isEmpty { return remoteBusy ? "正在搜索…" : "没有找到" }
+        if parts.isEmpty { return localTask != nil ? "正在搜索…" : "没有找到" }
         return parts.joined(separator: " · ")
     }
 
@@ -173,14 +156,13 @@ struct SearchView: View {
     /// 输入停顿 260ms 后再动手：两个请求都走网络，别把每个按键都发出去
     @MainActor
     private func schedule(_ raw: String) {
-        remoteTask?.cancel()
         localTask?.cancel()
         let key = raw.trimmingCharacters(in: .whitespaces)
         guard !key.isEmpty else {
-            local = []; localTotal = 0; remote = []; remoteTotal = 0; remoteNote = ""; remoteBusy = false
+            local = []; localTotal = 0
             return
         }
-        local = []; localTotal = 0; remote = []; remoteTotal = 0; remoteNote = ""; remoteBusy = false
+        local = []; localTotal = 0
 
         localTask = Task { @MainActor in
             try? await Task.sleep(nanoseconds: 260_000_000)
@@ -192,22 +174,6 @@ struct SearchView: View {
             localTask = nil
         }
 
-        remoteBusy = true
-        remoteTask = Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 260_000_000)
-            guard !Task.isCancelled else { return }
-            do {
-                let p = try await SearchAPI.remote(key)
-                guard !Task.isCancelled, key == keyword else { return }
-                remote = p.list
-                remoteTotal = p.total
-            } catch {
-                guard !Task.isCancelled, key == keyword else { return }
-                remote = []; remoteTotal = 0
-                remoteNote = "站内结果暂时拿不到，先看全库"
-            }
-            remoteBusy = false
-        }
     }
 
     /// 进页面时先问一下服务端全库有多少条，用来显示「在 N 部里搜」。

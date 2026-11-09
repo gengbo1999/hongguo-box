@@ -716,7 +716,7 @@ class Handler(BaseHTTPRequestHandler):
             off, lim = _page(qs, default_limit=30)
             r = catalog.search(conn(), q, offset=off, limit=lim)
             if q and off == 0:
-                web_rows, web_total = web_search(q)
+                web_rows, web_total = web_search(q)  # noqa: F841 (total 不再采用)
                 if web_rows:
                     # 先落库，后续同一关键词就能直接走本地；详情调用会补齐 vids。
                     upsert_many(web_rows)
@@ -736,7 +736,9 @@ class Handler(BaseHTTPRequestHandler):
                         return 2 if q in t else 3
                     items.sort(key=lambda it: (_rank(it), -(it.get("created") or 0)))
                     r["items"] = items[:lim]
-                    r["total"] = max(r["total"], web_total, len(items))
+                    # 站方 totalCount 远大于我们真正存下的量，不能拿来当「全库命中」；
+                    # 只信本地计数与本次实际能给出的条数，避免「命中几千、只显示几十」。
+                    r["total"] = max(r["total"], len(items))
                     r["next"] = off + len(r["items"])
             return self._send(200, {"ok": True, **r})
 
