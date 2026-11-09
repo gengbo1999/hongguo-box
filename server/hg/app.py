@@ -536,19 +536,43 @@ def _dy_sid_of(vid):
     return row["sid"] if row else ""
 
 
+def _dy_url_rank(url):
+    """抖音 CDN 链接可用性排序：weba 域免 Referer，-web 域必须带 Referer。"""
+    url = url or ""
+    host = url.split("/")[2] if "//" in url else ""
+    if "weba" in host:
+        return 0
+    if host == "www.douyin.com":
+        return 9
+    return 1
+
+
 def _dy_plays(video):
-    """把一个抖音 video 对象摊平成 [{url,h,w,br,gear}]，按分辨率降序去重。"""
+    """把一个抖音 video 对象摊平成 [{url,h,w,br,gear}]，按分辨率降序去重。
+
+    注意抖音同一档位会给多条 CDN 链接：`*-weba.douyinvod.com` **不带 Referer 也能拉**
+    （AVPlayer 直连靠这种），`*-web.douyinvod.com` 必须带 Referer，`www.douyin.com`
+    是个 302 跳板。所以这里按 (分辨率, host 优先级) 排，weba 永远排在前面。
+    """
     out, seen = [], set()
     w0, h0 = int(video.get("width") or 0), int(video.get("height") or 0)
     short0 = min(w0, h0)
 
+    def rank(url):
+        host = url.split("/")[2] if "//" in url else ""
+        if "weba" in host:
+            return 0
+        if host == "www.douyin.com":
+            return 9  # 302 跳板，别用
+        return 1
+
     def add(url, w, h, br, gear):
-        if not url or url in seen:
+        if not url or url in seen or rank(url) >= 9:
             return
         seen.add(url)
         out.append({"url": url, "w": int(w or w0), "h": int(h or h0),
                     "short": min(int(w or w0), int(h or h0)) or short0,
-                    "br": int(br or 0), "gear": gear or ""})
+                    "br": int(br or 0), "gear": gear or "", "rank": rank(url)})
 
     for u in video.get("play") or []:
         add(u, w0, h0, 0, "default")
@@ -558,7 +582,7 @@ def _dy_plays(video):
         for u in b.get("urls") or []:
             add(u, b.get("w") or w0, b.get("h") or h0, b.get("bit_rate"),
                 b.get("gear"))
-    out.sort(key=lambda t: -(t["short"] or 0))
+    out.sort(key=lambda t: (-(t["short"] or 0), t["rank"]))
     return out
 
 
@@ -821,8 +845,11 @@ class Handler(BaseHTTPRequestHandler):
         if not sid:
             return self._send(404, {"ok": False, "error": "not_found"})
         try:
-            # 直链带时效（约数小时）；10 分钟内复用缓存，过期再向抖音现拉
-            if now - (row["updated"] or 0) <= 600 and (row["plays"] or "[]") not in ("", "[]"):
+            cached = json.loads(row["plays"] or "[]") if row["plays"] else []
+            # 老缓存里没有 w/h、或者全是必须带 Referer 的 -web 链接，都当脏数据重拉
+            fresh = bool(cached) and all(int(t.get("w") or 0) > 0 for t in cached) \
+                and any("weba" in (t.get("url") or "") for t in cached)
+            if now - (row["updated"] or 0) <= 600 and fresh:
                 eps = [{"vid": vid, "width": row["width"], "height": row["height"],
                         "plays": row["plays"]}]
             else:
@@ -835,19 +862,26 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(404, {"ok": False, "error": "not_found"})
         tracks, seen = [], set()
         for t in json.loads(ep["plays"] or "[]"):
-            if t["url"] in seen:
+            url = t.get("url") or ""
+            if not url or url in seen:
                 continue
-            seen.add(t["url"])
-            short = int(t.get("short") or min(int(ep.get("width") or 0),
-                                              int(ep.get("height") or 0)))
+            seen.add(url)
+            short = int(t.get("short") or min(int(t.get("w") or 0),
+                                              int(t.get("h") or 0)))
             tracks.append({"definition": (f"{short}p" if short else "default"),
-                           "url": t["url"], "height": short, "width": 0,
-                           "size": t.get("br") or 0, "codec": "h264"})
-        # 同一档位只留码率最高的一条，客户端下拉不会出现几十个同名项
+                           "url": url,
+                           "width": int(t.get("w") or 0),
+                           "height": int(t.get("h") or 0),
+                           "size": 0,
+                           "bit_rate": int(t.get("br") or 0),
+                           "codec": "h264"})
+        # 同一档位只留一条：优先 weba(免 Referer)，其次码率高
         best = {}
         for t in tracks:
             cur = best.get(t["definition"])
-            if cur is None or (t["size"] or 0) > (cur["size"] or 0):
+            if cur is None or _dy_url_rank(t["url"]) < _dy_url_rank(cur["url"]) or (
+                    _dy_url_rank(t["url"]) == _dy_url_rank(cur["url"])
+                    and (t["bit_rate"] or 0) > (cur["bit_rate"] or 0)):
                 best[t["definition"]] = t
         order = {"1080p": 0, "720p": 1, "576p": 2, "540p": 3, "480p": 4,
                  "360p": 5, "default": 9}
