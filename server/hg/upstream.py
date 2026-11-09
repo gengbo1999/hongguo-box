@@ -345,6 +345,8 @@ def parse_tracks(payload):
                 "codec": str(meta.get("codec_type") or ""),
                 "url": url,
                 "spadeA": str(enc.get("spade_a") or ""),
+                # 红果对 VIP 集用 cenc-aes-ctr 加密（stsd=encv），AVPlayer 解不了
+                "encrypted": bool(enc.get("encrypt")),
             })
     return tracks
 

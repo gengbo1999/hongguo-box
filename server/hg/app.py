@@ -822,6 +822,14 @@ class Handler(BaseHTTPRequestHandler):
                 tracks, diag = upstream.resolve_tracks(vid)
             except upstream.UpstreamError as e:
                 return self._send(502, {"ok": False, "error": e.code, "detail": e.detail})
+            # 红果 VIP 集是 cenc-aes-ctr 加密流（stsd=encv），AVPlayer 解不了，
+            # 直接剔掉，免得客户端拿到播不了的地址一直转圈。
+            clear = [t for t in tracks if not t.get("encrypted")]
+            if tracks and not clear:
+                diag.setdefault("notes", []).append("encrypted: all gears are DRM")
+                return self._send(200, {"ok": False, "error": "encrypted",
+                                        "best": None, "tracks": [], "diag": diag})
+            tracks = clear
             best = upstream.pick_best(tracks)
             return self._send(200, {"ok": bool(best), "best": best,
                                     "tracks": tracks, "diag": diag})
@@ -1085,9 +1093,20 @@ class Handler(BaseHTTPRequestHandler):
         if model is None:
             return got
         out = dict(got)
-        out["video_model"] = model
         vl = model.get("video_list")
-        out["video_list"] = vl if isinstance(vl, list) else []
+        vl = vl if isinstance(vl, list) else []
+        # 红果 VIP 集是 cenc-aes-ctr 加密流（stsd=encv），AVPlayer 解不了：
+        # 直接剔掉，全加密时打 drm_blocked 让调用方明确报错。
+        def _enc(x):
+            return bool((x.get("encrypt_info") or {}).get("encrypt")) \
+                if isinstance(x, dict) else False
+        clear = [x for x in vl if not _enc(x)]
+        base = dict(model)
+        base["video_list"] = clear
+        out["video_model"] = base
+        out["video_list"] = clear
+        if vl and not clear:
+            out["drm_blocked"] = True
         return out
 
     def _resolve(self, body):
@@ -1117,6 +1136,10 @@ class Handler(BaseHTTPRequestHandler):
                 try:
                     got = upstream.js_video_model(vids[0])
                     got = self._normalize_video_model(got, payload)
+                    if got.get("drm_blocked"):
+                        return self._send(200, {"ok": False, "error": "encrypted",
+                                                "detail": "该集为加密片源，无法播放",
+                                                "data": got})
                     return self._send(200, {"ok": True, "data": got})
                 except upstream.UpstreamError as e:
                     return self._send(502, {"ok": False, "error": e.code,
