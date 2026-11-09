@@ -6,8 +6,8 @@
 server/
   hg/app.py          # HTTP 路由 + 站点抓取 + 老索引导入
   hg/catalog.py      # 目录层: 标签倒排 / 标签云 / 最新 / 随机 / 搜索 / 批量取
-  hg/upstream.py     # 上游甲方接口: 设备池 / _rticket / x-ss-stub / /sign
-  Dockerfile         # python:3.12-alpine + headless JRE(跑 unidbg 签名)
+  hg/upstream.py     # 上游甲方接口: 设备池 / JS 签名取流 / unidbg /sign
+  Dockerfile         # python:3.12-slim + JRE 21 + Node.js
   entrypoint.sh      # 先拉签名进程并发现端口, 再起 web
   k8s.yaml           # dev 命名空间: PVC + Deployment + Service + Ingress
   ../.github/workflows/build-image.yml  # v* 标签 -> ACR -> kubectl set image
@@ -25,8 +25,9 @@ server/
 - 目录接口实测：`/api/tag` 7ms、`/api/newest` 3ms、`/api/random` 5ms、
   `/api/tags` 首次 1.0s（1.9M 行倒排聚合）、之后 3ms
 
-之后靠 `HG_REFRESH_SEC`（默认 6 小时）在后台增量抓 `hongguoduanju.com` 的首页和四个分类，
-把新剧补进库。抓取复刻了客户端 `API.swift` 的 `_ROUTER_DATA` 解析。
+之后靠 `HG_REFRESH_SEC` 在后台增量抓 `hongguoduanju.com` 的首页和四个分类前 10 页，
+把新剧补进库。代码默认 `0`（不自动刷新），`server/k8s.yaml` 设为 `3600`，线上每小时一轮。
+抓取复刻了客户端 `API.swift` 的 `_ROUTER_DATA` 解析。
 
 想让服务端继承全量库又不改镜像，就把种子索引放进构建上下文。
 客户端已经不再打包这份索引了，种子从历史提交里取（仓库最后一次带它的版本）：
@@ -106,14 +107,15 @@ TLS 用 cert-manager 的 `letsencrypt-prod` 自动签发（集群里已有的 Cl
 
 ## 签名材料（可选）
 
-`/api/tracks` 要拿 1080p 就必须有 unidbg 签名进程。材料不进 git，构建前放到：
+`/api/tracks` 要拿 1080p，优先走 `server/sign/js/video_model.cjs`：Node.js 纯 JS 签名，
+文件已随仓库提供，不依赖 unidbg。unidbg 材料是可选的兼容/兜底路径，构建前可放到：
 
 ```sh
 cp -r <App>/Contents/Resources/backend/sign    server/sign       # unidbg-sign.jar
 cp -r <App>/Contents/Resources/backend/capture server/capture    # fq_oversea/{so,bin}
 ```
 
-没有这两样镜像照样能构建、索引和站点接口照常工作，只是 `/resolve` 走无签名直连
+没有 unidbg 材料时，JS 签名仍能拿 1080p；只有 JS 失败才回退无签名直连
 （实测红果对 `video_model` 系列接口不校验 `X-Argus`，所以很多时候够用）。
 
 `entrypoint.sh` 会拉起
