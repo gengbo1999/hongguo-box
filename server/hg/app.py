@@ -19,6 +19,7 @@ import os
 import re
 import sqlite3
 import struct
+from concurrent.futures import ThreadPoolExecutor
 import sys
 import threading
 import time
@@ -821,13 +822,16 @@ class Handler(BaseHTTPRequestHandler):
         """拉整部剧集并写 dy_ep 缓存, 返回缓存行。"""
         eps = douyin.episodes(sid)
         now = int(time.time())
+        # 每集要 Range 探一次真实分辨率，串行 40+ 集会超过客户端超时，开小并发
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            plays = list(pool.map(lambda e: _dy_plays(e.get("video") or {}), eps))
         rows = [(e["vid"], sid, e["ep"],
                  (e.get("video") or {}).get("duration_ms") or 0,
                  (e.get("video") or {}).get("width") or 0,
                  (e.get("video") or {}).get("height") or 0,
                  (e.get("video") or {}).get("cover") or "",
-                 json.dumps(_dy_plays(e.get("video") or {}), ensure_ascii=False),
-                 now) for e in eps]
+                 json.dumps(plays[i], ensure_ascii=False),
+                 now) for i, e in enumerate(eps)]
         with _db_lock:
             c = conn()
             c.executemany(
@@ -889,7 +893,13 @@ class Handler(BaseHTTPRequestHandler):
             # 老缓存里没有 w/h、或者全是必须带 Referer 的 -web 链接，都当脏数据重拉
             fresh = bool(cached) and all(int(t.get("w") or 0) > 0 for t in cached) \
                 and any("weba" in (t.get("url") or "") for t in cached)
-            if now - (row["updated"] or 0) <= 600 and fresh:
+            if fresh and now - (row["updated"] or 0) > 600:
+                # 过期但还有可用缓存：先回旧档位，后台刷新，别让客户端等 15s
+                threading.Thread(target=self._douyin_fetch_eps, args=(sid,),
+                                 daemon=True).start()
+                eps = [{"vid": vid, "width": row["width"], "height": row["height"],
+                        "plays": row["plays"]}]
+            elif fresh:
                 eps = [{"vid": vid, "width": row["width"], "height": row["height"],
                         "plays": row["plays"]}]
             else:
