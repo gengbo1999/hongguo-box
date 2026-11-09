@@ -118,11 +118,51 @@ enum Catalog {
 
 
     static func detail(_ seriesId: String) async throws -> (Series, [Episode]) {
+        // `dy:` 是抖音来源（红果站内没有），详情与剧集必须问自建服务端
+        if seriesId.hasPrefix("dy:") { return try await serverDetail(seriesId) }
         guard let j = routerJSON(try await friendlyGet("\(base)/detail?series_id=\(seriesId)", what: "该短剧不存在或已下架")) else { throw ApiError.noData }
         let sd = asDict(asDict(asDict(j["loaderData"])["detail_page"])["seriesDetail"])
         var s = seriesFrom(sd)
         if s.title.isEmpty { s.title = asStr(sd["series_name"]) }
         let eps = asArr(sd["vid_list"]).enumerated().map { Episode(index: $0.offset + 1, vid: asStr($0.element)) }
+        return (s, eps)
+    }
+
+    /// 抖音来源的详情：`GET {resolver}/api/detail?sid=dy:<id>`。
+    ///
+    /// 返回形状与服务端 `server/hg/app.py` 的 `_douyin_detail` 一致：
+    /// `{ok, series:{id,title,cover,intro,eps,tags}, episodes:[{index,vid}]}`
+    static func serverDetail(_ seriesId: String) async throws -> (Series, [Episode]) {
+        guard let root = RemoteResolver.base,
+              var comps = URLComponents(string: root + "/api/detail") else { throw ApiError.noData }
+        comps.queryItems = [URLQueryItem(name: "sid", value: seriesId)]
+        guard let url = comps.url else { throw ApiError.noData }
+
+        var req = URLRequest(url: url)
+        req.timeoutInterval = 20
+        req.setValue("application/json", forHTTPHeaderField: "Accept")
+        req.setValue("ShortDramaBox-Catalog/1", forHTTPHeaderField: "User-Agent")
+
+        let (data, resp) = try await URLSession.shared.data(for: req)
+        guard let http = resp as? HTTPURLResponse, http.statusCode == 200,
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              (obj["ok"] as? Bool) == true,
+              let d = obj["series"] as? [String: Any] else { throw ApiError.noData }
+
+        var s = Series(id: seriesId)
+        s.title = asStr(d["title"])
+        s.cover = asStr(d["cover"])
+        s.intro = asStr(d["intro"])
+        s.episodeCount = asInt(d["eps"])
+        s.tags = asArr(d["tags"]).map { asStr($0) }
+        if s.title.isEmpty { s.title = "抖音短剧" }
+
+        let eps: [Episode] = asArr(obj["episodes"]).compactMap { raw in
+            let e = asDict(raw)
+            let v = asStr(e["vid"])
+            guard !v.isEmpty else { return nil }
+            return Episode(index: asInt(e["index"]), vid: v)
+        }
         return (s, eps)
     }
 }

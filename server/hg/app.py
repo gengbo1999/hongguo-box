@@ -699,6 +699,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(400, {"ok": False, "error": "bad_vid"})
             if douyin.is_dy((qs.get("sid") or [""])[0].strip()) or _dy_vid(vid):
                 return self._douyin_tracks(vid)
+            # 客户端探路用: 明确只要抖音档位时, 未缓存就立刻返回, 不去打红果上游
+            if (qs.get("dy") or [""])[0] == "1":
+                return self._send(200, {"ok": False, "error": "not_dy",
+                                        "tracks": []})
             try:
                 tracks, diag = upstream.resolve_tracks(vid)
             except upstream.UpstreamError as e:

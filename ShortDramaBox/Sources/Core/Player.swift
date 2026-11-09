@@ -306,6 +306,42 @@ enum PlayerAPI {
     /// 这是拿到 1080p 的**唯一现实路径**：签名头只能在 Android 侧生成，
     /// 放到服务端之后，签名方案一打通就全量生效，不用重新侧载 App。
     /// 网关没配 / 连不上 / 签名还没通，都会返回空数组，调用方自然回退本地直连。
+    /// 抖音来源的直链：问自建服务端 `/api/tracks?vid=&dy=1`。
+    ///
+    /// 非抖音 vid 服务端会立刻回 `ok:false`，所以对红果集只是一次本地快速探测，
+    /// 不会拖慢正常链路（6s 超时兜底）。
+    static func douyinTracks(_ vid: String) async -> [VideoTrack] {
+        guard RemoteResolver.isEnabled, let root = RemoteResolver.base,
+              var comps = URLComponents(string: root + "/api/tracks") else { return [] }
+        comps.queryItems = [URLQueryItem(name: "vid", value: vid),
+                            URLQueryItem(name: "dy", value: "1")]
+        guard let url = comps.url else { return [] }
+
+        var req = URLRequest(url: url)
+        req.timeoutInterval = 6
+        req.setValue("application/json", forHTTPHeaderField: "Accept")
+        req.setValue("ShortDramaBox-Resolver/1", forHTTPHeaderField: "User-Agent")
+
+        guard let (data, resp) = try? await URLSession.shared.data(for: req),
+              let http = resp as? HTTPURLResponse, http.statusCode == 200,
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              (obj["ok"] as? Bool) == true else { return [] }
+
+        return asArr(obj["tracks"]).compactMap { raw in
+            let t = asDict(raw)
+            let u = asStr(t["url"])
+            guard !u.isEmpty else { return nil }
+            var v = VideoTrack()
+            v.definition = asStr(t["definition"])
+            v.width = asInt(t["width"])
+            v.height = asInt(t["height"])
+            v.size = asInt(t["size"])
+            v.codec = asStr(t["codec"])
+            v.url = u
+            return v
+        }
+    }
+
     static func remoteTracks(_ vid: String) async -> [VideoTrack] {
         guard RemoteResolver.isEnabled else { return [] }
 
@@ -476,7 +512,11 @@ enum PlayerAPI {
     /// 原始取流：网关 → 批量 → 单条 → 公网明文，保留所有档位。
     private static func fetchAllTracks(for vid: String) async -> [VideoTrack] {
         var reasons: [String] = []
-        // 0) 服务端签名网关（当前唯一能稳定拿 1080p 的路径）
+        // 0) 抖音来源：服务端 `/api/tracks?dy=1` 已缓存该集时直接给直链；
+        //    非抖音 vid 会立刻返回 ok:false，不额外打红果上游。
+        let dy = await douyinTracks(vid)
+        if !dy.isEmpty { return sorted(dy) }
+        // 1) 服务端签名网关（当前唯一能稳定拿 1080p 的路径）
         let remote = await remoteTracks(vid)
         if !remote.isEmpty { return sorted(remote) }
         reasons.append("网关无档位")
