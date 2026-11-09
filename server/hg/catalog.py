@@ -133,11 +133,17 @@ def tags_list(raw):
 
 
 def series_json(row):
-    """sqlite3.Row / 元组(sid,title,cover,intro,eps,tags,created) -> 统一条目。"""
+    """sqlite3.Row / 元组(sid,title,cover,intro,eps,tags,created[,source]) -> 统一条目。
+
+    元组走不了 row["source"]（KeyError 之外还会抛 TypeError），所以按 sid 的
+    `dy:` 前缀兜底判来源——老查询没 select source 时也能给出正确值。
+    """
     try:
         source = row["source"] or "hg"
-    except (IndexError, KeyError):
-        source = "hg"
+    except (IndexError, KeyError, TypeError):
+        source = ""
+    if not source:
+        source = "dy" if str(row[0] if row else "").startswith("dy:") else "hg"
     return {
         "id": row[0],
         "title": row[1],
