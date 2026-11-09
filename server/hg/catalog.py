@@ -28,6 +28,7 @@ import random
 import re
 import threading
 import time
+import unicodedata
 
 # 图床地址和客户端 LocalIndex 里的拼法完全一致
 COVER_HOST = "https://p6-novel.byteimg.com/novel-pic/"
@@ -59,7 +60,38 @@ SCHEMA = (
         PRIMARY KEY(tid, sid)) WITHOUT ROWID""",
     "CREATE INDEX IF NOT EXISTS ix_series_tag_order"
     " ON series_tag(tid, created DESC, sid DESC)",
+    # 抖音剧集缓存: 详情/播放按需拉一次, 别每次请求都打上游
+    """CREATE TABLE IF NOT EXISTS dy_ep(
+        vid TEXT PRIMARY KEY, sid TEXT NOT NULL, ep INTEGER NOT NULL,
+        duration_ms INTEGER DEFAULT 0, width INTEGER DEFAULT 0,
+        height INTEGER DEFAULT 0, cover TEXT DEFAULT '',
+        plays TEXT DEFAULT '', updated INTEGER DEFAULT 0)""",
+    "CREATE INDEX IF NOT EXISTS ix_dy_ep_sid ON dy_ep(sid, ep)",
+    # 抖音待定行: 比红果最新入库还新, 先挂这里, 每次红果 refresh 后自动重判
+    """CREATE TABLE IF NOT EXISTS dy_pending(
+        sid TEXT PRIMARY KEY, title TEXT DEFAULT '', real_name TEXT DEFAULT '',
+        eps INTEGER DEFAULT 0, created INTEGER DEFAULT 0,
+        first_seen INTEGER DEFAULT 0, checked INTEGER DEFAULT 0)""",
 )
+
+PUNCT = re.compile(r'[，。！？、：；""\'\'（）()\[\]【】·.…—\-_,!?:;"\']')
+
+
+def norm_title(t):
+    """标题归一化: 去「短剧 · 」前缀、书名号、全半角、标点、空白, 转小写。
+
+    抖音/红果两侧入库脚本必须用同一套规则, 否则比对结果会漂。
+    """
+    t = (t or "").strip()
+    t = re.sub(r"^短剧\s*[·•:：]\s*", "", t)
+    t = re.sub(r"[《》]", "", t)
+    t = unicodedata.normalize("NFKC", t)
+    t = re.sub(r"[\s\u3000]", "", t)
+    # 后缀必须在去标点之前剥: 否则 "1-99集" 里的 '-' 会先被当成标点删掉
+    t = re.sub(r"[（(]?[0-9一二三四五六七八九十百]+[-~至到][0-9一二三四五六七八九十百]+集[）)]?$", "", t)
+    t = re.sub(r"[（(]?(完整版|未删减版|合集|全集|大结局|抢先看)[）)]?$", "", t)
+    t = PUNCT.sub("", t)
+    return t.lower()
 
 _COLS = "sid,title,cover,intro,eps,tags,created"
 _COLS_S = "s.sid,s.title,s.cover,s.intro,s.eps,s.tags,s.created"
@@ -102,6 +134,10 @@ def tags_list(raw):
 
 def series_json(row):
     """sqlite3.Row / 元组(sid,title,cover,intro,eps,tags,created) -> 统一条目。"""
+    try:
+        source = row["source"] or "hg"
+    except (IndexError, KeyError):
+        source = "hg"
     return {
         "id": row[0],
         "title": row[1],
@@ -110,6 +146,7 @@ def series_json(row):
         "eps": row[4] or 0,
         "tags": tags_list(row[5]),
         "created": row[6] or 0,
+        "source": source,
     }
 
 
@@ -118,8 +155,18 @@ def series_json(row):
 def ensure_schema(c):
     for sql in SCHEMA:
         c.execute(sql)
+    _migrate_source(c)
     c.execute("CREATE TABLE IF NOT EXISTS meta(k TEXT PRIMARY KEY, v TEXT)")
     c.commit()
+
+
+def _migrate_source(c):
+    """给老库补 source 列(默认 hg)。不换主键: 抖音 sid 落库时带 dy: 前缀,
+    两个命名空间天然不撞, 老行和所有既有查询都不用改。"""
+    cols = {r[1] for r in c.execute("PRAGMA table_info(series)")}
+    if "source" not in cols:
+        c.execute("ALTER TABLE series ADD COLUMN source TEXT NOT NULL DEFAULT 'hg'")
+    c.execute("CREATE INDEX IF NOT EXISTS ix_source ON series(source)")
 
 
 def _meta(c, key, default=None):

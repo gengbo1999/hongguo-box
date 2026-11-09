@@ -29,6 +29,7 @@ import zlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import catalog
+import douyin
 import upstream
 
 DB_PATH = os.environ.get("HG_DB", "/data/hongguo.db")
@@ -409,7 +410,68 @@ def refresh(budget_sec=120):
         rebuild_catalog_index()
     except Exception as e:  # noqa: BLE001
         print(f"[catalog] 标签倒排重建失败 {e!r}", flush=True)
+    try:
+        rp = recheck_pending()
+        if rp["promoted"] or rp["matched"]:
+            rebuild_catalog_index()
+    except Exception as e:  # noqa: BLE001
+        print(f"[pending] 重判失败 {e!r}", flush=True)
     return n
+
+
+def recheck_pending(limit=2000):
+    """把 dy_pending 里那些已经能判定归属的行处理掉。
+
+    - 红果已经能按标题对上 -> 说明是同一部剧，直接丢弃（不再进池）
+    - 红果最新入库时间已经越过这条的 created 仍对不上 -> 确认独有，转正入 series(source='dy')
+    - 其余（比红果最新入库还新）-> 继续留观，只更新 checked
+
+    由 refresh() 每轮末尾调用，所以 pending 与红果索引同步，不需要人工重跑。
+    """
+    c = conn()
+    cutoff = int(c.execute("SELECT MAX(created) FROM series WHERE source='hg'").fetchone()[0] or 0)
+    rows = c.execute("SELECT sid,title,real_name,eps,created,first_seen FROM dy_pending "
+                     "ORDER BY created ASC LIMIT ?", (limit,)).fetchall()
+    if not rows:
+        return {"matched": 0, "promoted": 0, "stay": 0}
+
+    existing = {catalog.norm_title(t) for (t,) in
+                c.execute("SELECT title FROM series WHERE source='hg'") if t}
+    now = int(time.time())
+    matched, promoted, stay, promote_rows = [], [], [], []
+    for r in rows:
+        keys = {catalog.norm_title(r["title"]), catalog.norm_title(r["real_name"])}
+        keys.discard("")
+        if keys & existing:
+            matched.append(r["sid"])
+        elif int(r["created"] or 0) <= cutoff:
+            promote_rows.append(("dy:" + r["sid"], (r["title"] or "").strip(), "",
+                                 "", "[]", "[]", int(r["eps"] or 0), int(r["created"] or 0),
+                                 now, "dy"))
+            promoted.append(r["sid"])
+        else:
+            stay.append(r["sid"])
+
+    with c:
+        if promote_rows:
+            c.executemany(
+                """INSERT INTO series(sid,title,cover,intro,tags,vids,eps,created,updated,source)
+                   VALUES(?,?,?,?,?,?,?,?,?,?)
+                   ON CONFLICT(sid) DO NOTHING""", promote_rows)
+        gone = matched + promoted
+        for i in range(0, len(gone), 500):
+            chunk = gone[i:i + 500]
+            c.execute("DELETE FROM dy_pending WHERE sid IN (%s)" % ",".join("?" * len(chunk)), chunk)
+        if stay:
+            for i in range(0, len(stay), 500):
+                chunk = stay[i:i + 500]
+                c.execute("UPDATE dy_pending SET checked=? WHERE sid IN (%s)"
+                          % ",".join("?" * len(chunk)), [now] + chunk)
+    if promoted:
+        print(f"[pending] 转正 {len(promoted)} 条（红果已越过其 created 仍无此剧）", flush=True)
+    if matched:
+        print(f"[pending] 丢弃 {len(matched)} 条（红果已收录同名剧）", flush=True)
+    return {"matched": len(matched), "promoted": len(promoted), "stay": len(stay)}
 
 
 def refresh_loop():
@@ -455,6 +517,69 @@ def _clamp_int(values, default, lo, hi):
 def _page(qs, default_limit=catalog.DEFAULT_LIMIT):
     return (_clamp_int(qs.get("offset"), 0, 0, 10 ** 9),
             _clamp_int(qs.get("limit"), default_limit, 1, catalog.MAX_LIMIT))
+
+
+# ---------------------------------------------------------------- 抖音路由
+
+def _dy_vid(vid):
+    """这个 vid 是不是抖音剧集(已缓存过)。"""
+    row = conn().execute("SELECT 1 FROM dy_ep WHERE vid=? LIMIT 1", (vid,)).fetchone()
+    return bool(row)
+
+
+def _dy_sid_of(vid):
+    row = conn().execute("SELECT sid FROM dy_ep WHERE vid=? LIMIT 1", (vid,)).fetchone()
+    return row["sid"] if row else ""
+
+
+def _dy_plays(video):
+    """把一个抖音 video 对象摊平成 [{url,h,w,br,gear}]，按分辨率降序去重。"""
+    out, seen = [], set()
+    w0, h0 = int(video.get("width") or 0), int(video.get("height") or 0)
+    short0 = min(w0, h0)
+
+    def add(url, w, h, br, gear):
+        if not url or url in seen:
+            return
+        seen.add(url)
+        out.append({"url": url, "w": int(w or w0), "h": int(h or h0),
+                    "short": min(int(w or w0), int(h or h0)) or short0,
+                    "br": int(br or 0), "gear": gear or ""})
+
+    for u in video.get("play") or []:
+        add(u, w0, h0, 0, "default")
+    for u in video.get("play_h264") or []:
+        add(u, w0, h0, 0, "h264")
+    for b in video.get("bit_rate") or []:
+        for u in b.get("urls") or []:
+            add(u, b.get("w") or w0, b.get("h") or h0, b.get("bit_rate"),
+                b.get("gear"))
+    out.sort(key=lambda t: -(t["short"] or 0))
+    return out
+
+
+def _dy_track_list(ep):
+    """douyin 剧集 -> 和 upstream 同形的档位列表。"""
+    v = ep.get("video") or {}
+    w, h = int(v.get("width") or 0), int(v.get("height") or 0)
+    out, seen = [], set()
+
+    def add(url, hh, br, gear):
+        if not url or url in seen:
+            return
+        seen.add(url)
+        out.append({"definition": f"{hh}p" if hh else (gear or ""),
+                    "width": w, "height": int(hh or 0), "size": 0,
+                    "codec": "h264", "url": url,
+                    "bit_rate": int(br or 0), "gear": gear or ""})
+
+    for u in v.get("play") or []:
+        add(u, h, 0, "default")
+    for b in v.get("bit_rate") or []:
+        for u in b.get("urls") or []:
+            add(u, b.get("h") or 0, b.get("bit_rate") or 0, b.get("gear") or "")
+    out.sort(key=lambda t: -(t["height"] or 0))
+    return out
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -546,6 +671,8 @@ class Handler(BaseHTTPRequestHandler):
             sid = (qs.get("sid") or [""])[0].strip()
             if not sid:
                 return self._send(400, {"ok": False, "error": "missing_sid"})
+            if douyin.is_dy(sid):
+                return self._douyin_detail(sid)
             sql = ("SELECT sid,title,cover,intro,eps,tags,created,vids"
                    " FROM series WHERE sid=?")
             row = conn().execute(sql, (sid,)).fetchone()
@@ -570,6 +697,8 @@ class Handler(BaseHTTPRequestHandler):
             vid = (qs.get("vid") or [""])[0].strip()
             if not re.fullmatch(r"[0-9]{8,24}", vid or ""):
                 return self._send(400, {"ok": False, "error": "bad_vid"})
+            if douyin.is_dy((qs.get("sid") or [""])[0].strip()) or _dy_vid(vid):
+                return self._douyin_tracks(vid)
             try:
                 tracks, diag = upstream.resolve_tracks(vid)
             except upstream.UpstreamError as e:
@@ -613,6 +742,111 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, {"ok": True, "items": catalog.by_ids(conn(), ids)})
 
         return self._send(404, {"ok": False, "error": "not_found"})
+
+    # ------------------------------------------------ 抖音(第二路上游)
+
+    def _douyin_fetch_eps(self, sid):
+        """拉整部剧集并写 dy_ep 缓存, 返回缓存行。"""
+        eps = douyin.episodes(sid)
+        now = int(time.time())
+        rows = [(e["vid"], sid, e["ep"],
+                 (e.get("video") or {}).get("duration_ms") or 0,
+                 (e.get("video") or {}).get("width") or 0,
+                 (e.get("video") or {}).get("height") or 0,
+                 (e.get("video") or {}).get("cover") or "",
+                 json.dumps(_dy_plays(e.get("video") or {}), ensure_ascii=False),
+                 now) for e in eps]
+        with _db_lock:
+            c = conn()
+            c.executemany(
+                """INSERT INTO dy_ep(vid,sid,ep,duration_ms,width,height,cover,plays,updated)
+                   VALUES(?,?,?,?,?,?,?,?,?)
+                   ON CONFLICT(vid) DO UPDATE SET ep=excluded.ep,
+                     duration_ms=excluded.duration_ms, width=excluded.width,
+                     height=excluded.height, cover=excluded.cover,
+                     plays=excluded.plays, updated=excluded.updated""", rows)
+            c.commit()
+            return [dict(r) for r in c.execute(
+                "SELECT vid,ep,duration_ms,width,height,cover,plays FROM dy_ep"
+                " WHERE sid=? ORDER BY ep", (sid,))]
+
+    def _douyin_detail(self, sid):
+        try:
+            d = douyin.detail(sid)
+        except Exception as e:
+            return self._send(502, {"ok": False, "error": "douyin_detail",
+                                    "detail": str(e)[:200]})
+        pub = "dy:" + d["sid"]
+        now = int(time.time())
+        with _db_lock:
+            c = conn()
+            c.execute(
+                """INSERT INTO series(sid,title,cover,intro,eps,tags,vids,created,updated,source)
+                   VALUES(?,?,?,?,?,?,?,?,?,'dy')
+                   ON CONFLICT(sid) DO UPDATE SET title=excluded.title,
+                     cover=excluded.cover, intro=excluded.intro, eps=excluded.eps,
+                     tags=excluded.tags, created=excluded.created,
+                     updated=excluded.updated, source='dy'""",
+                (pub, d["name"] or d["real_name"], d["cover"], d["desc"],
+                 d["eps"], ",".join(d["tags"]), "", d["created"], now))
+            c.commit()
+            eps = [dict(r) for r in c.execute(
+                "SELECT vid,ep FROM dy_ep WHERE sid=? ORDER BY ep", (pub,))]
+        if not eps:
+            try:
+                eps = self._douyin_fetch_eps(pub)
+            except Exception as e:
+                return self._send(502, {"ok": False, "error": "douyin_episodes",
+                                        "detail": str(e)[:200]})
+        row = conn().execute(
+            "SELECT sid,title,cover,intro,eps,tags,created,source FROM series WHERE sid=?",
+            (pub,)).fetchone()
+        return self._send(200, {"ok": True, "series": catalog.series_json(row),
+                                "episodes": [{"index": e["ep"], "vid": e["vid"]}
+                                             for e in eps]})
+
+    def _douyin_tracks(self, vid):
+        now = int(time.time())
+        row = conn().execute(
+            "SELECT sid,plays,width,height,updated FROM dy_ep WHERE vid=?", (vid,)).fetchone()
+        sid = row["sid"] if row else ""
+        if not sid:
+            return self._send(404, {"ok": False, "error": "not_found"})
+        try:
+            # 直链带时效（约数小时）；10 分钟内复用缓存，过期再向抖音现拉
+            if now - (row["updated"] or 0) <= 600 and (row["plays"] or "[]") not in ("", "[]"):
+                eps = [{"vid": vid, "width": row["width"], "height": row["height"],
+                        "plays": row["plays"]}]
+            else:
+                eps = self._douyin_fetch_eps(sid)
+        except Exception as e:
+            return self._send(502, {"ok": False, "error": "douyin_episodes",
+                                    "detail": str(e)[:200]})
+        ep = next((e for e in eps if e["vid"] == vid), None)
+        if not ep:
+            return self._send(404, {"ok": False, "error": "not_found"})
+        tracks, seen = [], set()
+        for t in json.loads(ep["plays"] or "[]"):
+            if t["url"] in seen:
+                continue
+            seen.add(t["url"])
+            short = int(t.get("short") or min(int(ep.get("width") or 0),
+                                              int(ep.get("height") or 0)))
+            tracks.append({"definition": (f"{short}p" if short else "default"),
+                           "url": t["url"], "height": short, "width": 0,
+                           "size": t.get("br") or 0, "codec": "h264"})
+        # 同一档位只留码率最高的一条，客户端下拉不会出现几十个同名项
+        best = {}
+        for t in tracks:
+            cur = best.get(t["definition"])
+            if cur is None or (t["size"] or 0) > (cur["size"] or 0):
+                best[t["definition"]] = t
+        order = {"1080p": 0, "720p": 1, "576p": 2, "540p": 3, "480p": 4,
+                 "360p": 5, "default": 9}
+        tracks = sorted(best.values(), key=lambda t: order.get(t["definition"], 6))
+        best = tracks[0] if tracks else None
+        return self._send(200, {"ok": bool(best), "best": best, "tracks": tracks,
+                                "diag": {"path": "douyin", "notes": []}})
 
     # ------------------------------------------------------- POST
     def do_POST(self):
@@ -802,5 +1036,8 @@ if __name__ == "__main__":
     elif len(sys.argv) > 1 and sys.argv[1] == "refresh":
         conn()
         refresh()
+    elif len(sys.argv) > 1 and sys.argv[1] == "pending":
+        conn()
+        print(recheck_pending())
     else:
         main()
