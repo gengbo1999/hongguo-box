@@ -12,6 +12,9 @@ struct Series: Identifiable, Hashable, Codable {
     /// 来源：hg=红果（默认） dy=抖音；老数据为空，按 id 前缀兜底。
     /// 列表卡片和详情页据此显示来源徽标（图标+文字），避免混池后分不清出处。
     var source: String = ""
+    /// 同一部剧在其它来源的条目（列表按标题去重后保留，供详情页/播放页「换源」）。
+    /// 仅用于内存展示，不参与持久化。
+    var alternates: [Series]? = nil
 }
 
 struct Episode: Identifiable, Hashable {
@@ -90,5 +93,70 @@ extension Series {
             else { return nil }
         }
         return total + cur
+    }
+
+    /// 是否抖音源（老数据 source 为空时按 id 前缀兜底）。
+    var isDouyin: Bool {
+        let kind = source.isEmpty ? (id.hasPrefix("dy:") ? "dy" : "hg") : source
+        return kind == "dy"
+    }
+
+    /// 列表去重键：规范化标题 + 集数。
+    /// 集数不同视为不同剧，避免把同名但不同季/不同长度的条目误合并。
+    var dedupeKey: String {
+        guard !title.isEmpty else { return "id:\(id)" }
+        var t = title.lowercased()
+        t.removeAll { ch in
+            ch == " " || ch == "　" || ch == "：" || ch == ":" || ch == "·"
+                || ch == "-" || ch == "—" || ch == "，" || ch == ","
+        }
+        return "\(t)#\(episodeCount)"
+    }
+
+    /// 合并同剧的另一个来源条目：优先抖音作主条目，其余进入 alternates。
+    mutating func mergeAlternate(_ other: Series) {
+        guard other.id != id else { return }
+        if other.isDouyin && !isDouyin {
+            // 红果条目让位给抖音条目，原条目降为备用源。
+            var me = self
+            me.alternates = nil
+            var them = other
+            var alts: [Series] = []
+            // 自己 + 两边原有的备用源，按 id 去重（可能互相已经包含对方）。
+            for cand in [me] + (them.alternates ?? []) + (alternates ?? []) {
+                guard cand.id != them.id else { continue }
+                guard !alts.contains(where: { $0.id == cand.id }) else { continue }
+                var copy = cand
+                copy.alternates = nil
+                alts.append(copy)
+            }
+            them.alternates = alts.isEmpty ? nil : alts
+            self = them
+            return
+        }
+        var alts = alternates ?? []
+        if !alts.contains(where: { $0.id == other.id }) {
+            var copy = other
+            copy.alternates = nil     // 保持扁平，避免嵌套alternates
+            alts.append(copy)
+        }
+        alternates = alts
+    }
+
+    /// 对列表按 dedupeKey 合并同剧多源，保持首次出现顺序。
+    static func dedupe(_ list: [Series]) -> [Series] {
+        var out: [Series] = []
+        var index: [String: Int] = [:]
+        for var s in list {
+            s.alternates = nil
+            let key = s.dedupeKey
+            if let i = index[key] {
+                out[i].mergeAlternate(s)
+            } else {
+                index[key] = out.count
+                out.append(s)
+            }
+        }
+        return out
     }
 }

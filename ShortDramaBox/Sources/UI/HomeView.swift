@@ -375,18 +375,37 @@ private struct TagResultGrid: View {
         }
         .refreshable { reset(); await more() }
         .task { await more() }
+        // 底部多留一点，最后一行不贴着 tab 栏
+        .contentMargins(.bottom, 24, for: .scrollContent)
     }
 
     private func more() async {
         guard !loading, !finished else { return }
         loading = true
         defer { loading = false }
-        let off = page * per
-        let r = await CatalogAPI.tagPage(tag, offset: off, limit: per)
-        total = r.total
-        if r.items.isEmpty { finished = true } else {
-            items.append(contentsOf: r.items)
+        // 一页可能全是已合并的重复条目，此时列表不增长；
+        // 继续取下一页，直到有新卡片或取空为止（最多连取 20 页，防服务端异常时死循环）。
+        var hops = 0
+        while !finished && hops < 20 {
+            hops += 1
+            let r = await CatalogAPI.tagPage(tag, offset: page * per, limit: per)
+            total = r.total
+            if r.items.isEmpty { finished = true; break }
+            let before = items.count
+            // 同一部剧在红果 / 抖音各有一条，按标题+集数合并成一张卡，
+            // 优先抖音源（高清档位更全），红果条目收进 alternates 供「换源」。
+            for s in r.items {
+                let key = s.dedupeKey
+                if let i = items.firstIndex(where: { $0.dedupeKey == key }) {
+                    items[i].mergeAlternate(s)
+                } else {
+                    var copy = s
+                    copy.alternates = nil
+                    items.append(copy)
+                }
+            }
             page += 1
+            if items.count > before { break }
         }
     }
 

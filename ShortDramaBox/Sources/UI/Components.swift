@@ -68,7 +68,20 @@ struct PosterCard: View {
             }
             Text(series.title).font(.system(size: 12)).lineLimit(2)
                 .foregroundStyle(.white.opacity(0.9))
-                .frame(width: width, alignment: .leading)
+                // 固定两行高度，同一行卡片标题长短不一时也能对齐
+                .frame(width: width, height: 31, alignment: .topLeading)
+            HStack(spacing: 4) {
+                if series.episodeCount > 0 {
+                    Text("全\(series.episodeCount)集")
+                }
+                if series.alternates?.isEmpty == false {
+                    Text("可换源")
+                        .foregroundStyle(Color(red: 0.10, green: 0.78, blue: 0.85).opacity(0.9))
+                }
+            }
+            .font(.system(size: 10))
+            .foregroundStyle(.white.opacity(0.45))
+            .frame(width: width, height: 12, alignment: .leading)
         }
     }
 }

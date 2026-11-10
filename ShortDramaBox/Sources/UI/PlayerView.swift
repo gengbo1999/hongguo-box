@@ -7,6 +7,8 @@ let SPEEDS: [Float] = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0]
 struct PlayerView: View {
     let series: Series
     let episodes: [Episode]
+    /// 退到公网明文档时，点「切到抖音源」交给详情页换源并续播。
+    let onSwitchSource: ((Series) -> Void)?
     @State private var current: Episode
     @Environment(\.dismiss) private var dismiss
 
@@ -28,8 +30,11 @@ struct PlayerView: View {
     /// 播放页是否处于强制横屏（只影响本页，退出时恢复竖屏）
     @State private var landscape = false
 
-    init(series: Series, episodes: [Episode], start: Episode) {
-        self.series = series; self.episodes = episodes; _current = State(initialValue: start)
+    init(series: Series, episodes: [Episode], start: Episode,
+         onSwitchSource: ((Series) -> Void)? = nil) {
+        self.series = series; self.episodes = episodes
+        self.onSwitchSource = onSwitchSource
+        _current = State(initialValue: start)
         _scrolledID = State(initialValue: start.index)
     }
 
@@ -91,7 +96,50 @@ struct PlayerView: View {
             OrientationSupport.set(.portrait)
         }
         .overlay(alignment: .topLeading) { topBar }
+        .overlay(alignment: .top) {
+            if let fb = publicFallback {
+                fallbackBanner(fb.quality, fb.alt)
+                    .padding(.top, 60)
+                    .padding(.horizontal, 16)
+                    .transition(.opacity)
+            }
+        }
+        .animation(.easeInOut(duration: 0.2), value: qualityOf[current.index])
         .sheet(isPresented: $showPanel) { panel }
+    }
+
+    /// 当前集是否退到了公网明文档；是则给出档位和可切来源。
+    private var publicFallback: (quality: String, alt: Series?)? {
+        guard let q = qualityOf[current.index], q.hasPrefix("公开") else { return nil }
+        let alt = (series.alternates ?? []).first { $0.id != series.id }
+        return (q, alt)
+    }
+
+    /// 公网兜底提示条：明确告诉用户「这集只有 360p」以及能切到哪个源，
+    /// 不再静默变糊。有备用源时一键切换，详情页换源后会续播同一集。
+    private func fallbackBanner(_ quality: String, _ alt: Series?) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 10))
+            Text("该源暂无高清，当前 \(quality)")
+            if let alt {
+                Button {
+                    onSwitchSource?(alt)
+                } label: {
+                    Text("切到\(alt.sourceName)源")
+                        .font(.system(size: 10, weight: .semibold))
+                        .padding(.horizontal, 7).padding(.vertical, 3)
+                        .background(.white.opacity(0.22))
+                        .clipShape(Capsule())
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .font(.system(size: 10.5))
+        .foregroundStyle(.white)
+        .padding(.horizontal, 10).padding(.vertical, 5)
+        .background(.black.opacity(0.62))
+        .clipShape(Capsule())
     }
 
     /// 预取窗口：把后面 5 集的地址一次批量取好（一次请求），

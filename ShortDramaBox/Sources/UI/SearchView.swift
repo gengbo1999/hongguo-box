@@ -24,12 +24,9 @@ struct SearchView: View {
     private var keyword: String { q.trimmingCharacters(in: .whitespaces) }
 
     private var results: [Series] {
-        let k = keyword
-        guard !k.isEmpty else { return [] }
-        var out: [Series] = []
-        var ids = Set<String>()
-        for s in local where ids.insert(s.id).inserted { out.append(s) }
-        return out
+        guard !keyword.isEmpty else { return [] }
+        // 同剧在红果/抖音各有一条时合并成一张卡，优先抖音源并保留换源入口。
+        return Series.dedupe(local)
     }
 
     var body: some View {
@@ -52,6 +49,7 @@ struct SearchView: View {
                                 }
                             }.padding()
                         }
+                        .contentMargins(.bottom, 24, for: .scrollContent)
                         .safeAreaInset(edge: .top) { noteBar }
                         .scrollDismissesKeyboard(.immediately)
                     }
@@ -146,6 +144,8 @@ struct SearchView: View {
         if localTotal > 0 {
             parts.append("全库命中 \(localTotal) 部")
             if localTotal > Self.localLimit { parts.append("显示前 \(Self.localLimit) 部") }
+            let merged = local.count - results.count
+            if merged > 0 { parts.append("合并 \(merged) 条同剧多源") }
         }
         if parts.isEmpty { return localTask != nil ? "正在搜索…" : "没有找到" }
         return parts.joined(separator: " · ")
