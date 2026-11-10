@@ -43,7 +43,10 @@ axios.post = (url, body, opts = {}) => axios(url, { ...opts, method: 'POST', bod
 
 
 const SITE = 'https://hongguoduanju.com';
-const VIDEO_API = 'https://api5-normal-sinfonlineb.fqnovel.com/novel/player/multi_video_model/v1/';
+// 2026-11-10 起 /multi_video_model/v1/ 对签名批量请求返回 200 空体（社区 issue
+// N3urda/hongguoTV#16/#19 同款），preload 变体仍正常；v1 保留作回退。
+const VIDEO_API = 'https://api5-normal-sinfonlineb.fqnovel.com/novel/player/multi_video_model/preload/v1/';
+const VIDEO_API_V1 = 'https://api5-normal-sinfonlineb.fqnovel.com/novel/player/multi_video_model/v1/';
 const APP_SEARCH_API = 'https://api5-normal-sinfonlinea.fqnovel.com/reading/bookapi/search/tab/v';
 const VIDEO_UA = 'com.phoenix.read/71332 (Linux; U; Android 16; zh_CN; 25053RT47C; Build/BP2A.250605.031.A3; Cronet/TTNetVersion:04657795 2026-01-23 QuicVersion:c67e9834 2025-09-08)';
 const APP_UA = 'com.phoenix.read/72232 (Linux; U; Android 16; zh_CN; 25053RT47C; Build/BP2A.250605.031.A3)';
@@ -444,10 +447,10 @@ async function signedAppGet(values) {
 
 function videoModelUrl() { const query = new URLSearchParams({ ...DEVICE }); return `${VIDEO_API}?${query}`; }
 
-function signedVideoRequest(payload) {
+function signedVideoRequest(api, payload) {
     const khronos = Math.floor(Date.now() / 1000); const body = Buffer.from(payload); const ticketBase = Date.now(); let requestTicket = ticketBase; let query = ''; let url = '';
     // branch 1 的签名变体服务端不认：抖动 _rticket 找一个可用的 branch（最多试 32 秒偏移）
-    for (let offset = 0; offset < 32; offset += 1) { requestTicket = ticketBase + offset; const values = { ...DEVICE, ts: String(khronos), _rticket: String(requestTicket) }; query = pythonUrlEncode(values); url = `${VIDEO_API}?${query}`; if (branchOf(url, body, khronos) !== 1) break; }
+    for (let offset = 0; offset < 32; offset += 1) { requestTicket = ticketBase + offset; const values = { ...DEVICE, ts: String(khronos), _rticket: String(requestTicket) }; query = pythonUrlEncode(values); url = `${api}?${query}`; if (branchOf(url, body, khronos) !== 1) break; }
     const random = Math.floor(Math.random() * 65536); const headers = {
         'User-Agent': VIDEO_UA, Accept: 'application/json; charset=utf-8,application/x-protobuf', 'Content-Type': 'application/json; charset=UTF-8',
         'x-xs-from-web': '0', 'x-ss-req-ticket': String(requestTicket), 'x-tt-request-tag': 't=0;n=0', 'sdk-version': '2', 'passport-sdk-version': '50561',
@@ -463,11 +466,23 @@ async function requestVideoModel(vid) {
         biz_param: { detail_page_version: 0, device_level: 3, disable_digg_stat: false, need_all_video_definition: true, need_mp4_align: false, use_os_player: false, use_server_dns: false, video_platform: 1024 },
         mixed_video_id_map: { '1004': [str(vid)] },
     });
-    const signed = signedVideoRequest(payload);
-    const resp = await axios.post(signed.url, signed.body, { headers: signed.headers, timeout: 20000, responseType: 'text' });
-    const data = jsonBody(resp.data);
-    if (resp.status !== 200 || !data || Number(data.Code || data.code || 0) !== 0) throw new Error(`video_model failed: ${data?.Message || data?.message || resp.status}`);
-    return data;
+    let lastError = null;
+    for (const api of [VIDEO_API, VIDEO_API_V1]) {
+        try {
+            const signed = signedVideoRequest(api, payload);
+            const resp = await axios.post(signed.url, signed.body, { headers: signed.headers, timeout: 20000, responseType: 'text' });
+            const data = jsonBody(resp.data);
+            const body = data && (data.data || data.Data);
+            if (resp.status === 200 && data && Number(data.Code || data.code || 0) === 0
+                && body && typeof body === 'object' && Object.keys(body).length) {
+                return data;
+            }
+            lastError = new Error(`video_model failed: ${data?.Message || data?.message || resp.status} (${api.includes('/preload/') ? 'preload' : 'v1'})`);
+        } catch (e) {
+            lastError = e;
+        }
+    }
+    throw lastError || new Error('video_model failed');
 }
 
 
