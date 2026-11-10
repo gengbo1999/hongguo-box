@@ -564,6 +564,28 @@ def _page(qs, default_limit=catalog.DEFAULT_LIMIT):
             _clamp_int(qs.get("limit"), default_limit, 1, catalog.MAX_LIMIT))
 
 
+# ---------------------------------------------------------------- 档位过滤
+#
+# 红果的每一档都是 cenc-aes-ctr 加密（stsd=encv），同时下发 spade_a：
+# 客户端会先整段下载，用 spade_a 派生 AES-128 内容密钥、按 senc 的 base_iv
+# 逐样本 CTR 解密、再去掉 CENC 盒，交给 AVPlayer 的是明文 MP4。
+# 所以「encrypt=true」本身不是丢弃理由 —— 2026-11-09 曾按它过滤，把 5 档
+# 全剔光，服务端对每一集都回 encrypted，客户端只能退回只有 360p 的公网
+# 明文源。真正播不了的是「加密但没给 spade_a」的档位，只有那种才该丢。
+
+def _decryptable_track(t):
+    """parse_tracks 产出的档位：加密档必须带 spadeA 才能在本机解密。"""
+    return not t.get("encrypted") or bool(t.get("spadeA"))
+
+
+def _decryptable_raw(item):
+    """上游原始 video_list 条目：同上，看 encrypt_info.spade_a。"""
+    enc = item.get("encrypt_info") if isinstance(item, dict) else None
+    if not isinstance(enc, dict) or not enc.get("encrypt"):
+        return True
+    return bool(enc.get("spade_a"))
+
+
 # ---------------------------------------------------------------- 抖音路由
 
 def _dy_vid(vid):
@@ -822,11 +844,11 @@ class Handler(BaseHTTPRequestHandler):
                 tracks, diag = upstream.resolve_tracks(vid)
             except upstream.UpstreamError as e:
                 return self._send(502, {"ok": False, "error": e.code, "detail": e.detail})
-            # 红果 VIP 集是 cenc-aes-ctr 加密流（stsd=encv），AVPlayer 解不了，
-            # 直接剔掉，免得客户端拿到播不了的地址一直转圈。
-            clear = [t for t in tracks if not t.get("encrypted")]
+            # 只有「加密且没给 spade_a」的档位才真的解不了；红果正常下发的
+            # cenc-aes-ctr 档都带 spade_a，客户端会自己解密（见 _decryptable_track）。
+            clear = [t for t in tracks if _decryptable_track(t)]
             if tracks and not clear:
-                diag.setdefault("notes", []).append("encrypted: all gears are DRM")
+                diag.setdefault("notes", []).append("encrypted: no spade_a key")
                 return self._send(200, {"ok": False, "error": "encrypted",
                                         "best": None, "tracks": [], "diag": diag})
             tracks = clear
@@ -1095,12 +1117,8 @@ class Handler(BaseHTTPRequestHandler):
         out = dict(got)
         vl = model.get("video_list")
         vl = vl if isinstance(vl, list) else []
-        # 红果 VIP 集是 cenc-aes-ctr 加密流（stsd=encv），AVPlayer 解不了：
-        # 直接剔掉，全加密时打 drm_blocked 让调用方明确报错。
-        def _enc(x):
-            return bool((x.get("encrypt_info") or {}).get("encrypt")) \
-                if isinstance(x, dict) else False
-        clear = [x for x in vl if not _enc(x)]
+        # 同 /api/tracks：加密但带 spade_a 的档位客户端能解，不能剔。
+        clear = [x for x in vl if _decryptable_raw(x)]
         base = dict(model)
         base["video_list"] = clear
         out["video_model"] = base
