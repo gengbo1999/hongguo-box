@@ -267,6 +267,15 @@ def rebuild_works(c, batch=20000):
     """
     t0 = time.time()
     fill_norms(c)
+    try:
+        _rebuild_works_body(c, t0, batch)
+    except Exception:
+        c.rollback()
+        raise
+    return True
+
+
+def _rebuild_works_body(c, t0, batch):
     now = int(time.time())
     c.execute("DELETE FROM work_tag")
     c.execute("DELETE FROM work_source")
