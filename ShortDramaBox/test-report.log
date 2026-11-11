@@ -1,0 +1,157 @@
+=== 单元测试报告  run 104  exit=0 ===
+commit: 9a83e58aa5229319ac8f10a4411e8de4d15ee5e9   模拟器: 4A57FB15-6E7C-49CC-BE93-450B18BD286E
+--- 结果 ---
+Test Case '-[ShortDramaBoxTests.CrashHardeningTests testBatchBodyCapsAtFiveVids]' passed (0.004 seconds).
+Test Case '-[ShortDramaBoxTests.CrashHardeningTests testDecryptAVDoesNotOverRejectInRangeSamples]' passed (0.008 seconds).
+Test Case '-[ShortDramaBoxTests.CrashHardeningTests testDecryptAVHandlesGarbageAndMissingFiles]' passed (0.003 seconds).
+Test Case '-[ShortDramaBoxTests.CrashHardeningTests testDecryptAVSkipsOutOfRangeSamples]' passed (0.002 seconds).
+Test Case '-[ShortDramaBoxTests.CrashHardeningTests testDecryptAVWithMalformedKeyDoesNotCrash]' passed (0.001 seconds).
+Test Case '-[ShortDramaBoxTests.CrashHardeningTests testHexBytesRejectsMalformed]' passed (0.000 seconds).
+Test Case '-[ShortDramaBoxTests.CrashHardeningTests testNewestHandlesOutOfRangeOffsets]' passed (2.396 seconds).
+Test Case '-[ShortDramaBoxTests.CrashHardeningTests testNewestManyBatchesStayDisjoint]' passed (2.529 seconds).
+Test Case '-[ShortDramaBoxTests.CrashHardeningTests testParseTrackSamplesRejectsAbsurdCounts]' passed (0.001 seconds).
+Test Case '-[ShortDramaBoxTests.CrashHardeningTests testPickIsSharedBetweenPlaybackAndPrefetch]' passed (0.002 seconds).
+Test Case '-[ShortDramaBoxTests.CrashHardeningTests testRandomSeriesExcludingAcrossRoundsStaysUnique]' passed (1.351 seconds).
+Test Case '-[ShortDramaBoxTests.CrashHardeningTests testRandomSeriesHandlesExtremeLimits]' passed (0.743 seconds).
+Test Case '-[ShortDramaBoxTests.CrashHardeningTests testSpadeToKeyRejectsGarbage]' passed (0.001 seconds).
+Test Case '-[ShortDramaBoxTests.CrashHardeningTests testStripCENCFailsSafelyOnGarbage]' passed (0.001 seconds).
+Test Case '-[ShortDramaBoxTests.CrashHardeningTests testStripCENCPreservesMdatOffset]' passed (0.004 seconds).
+Test Case '-[ShortDramaBoxTests.CrashHardeningTests testTranscoderRenditionAndOutputPath]' passed (0.021 seconds).
+Test Case '-[ShortDramaBoxTests.CrashHardeningTests testUnwrapV1FuzzNeverCrashes]' passed (0.051 seconds).
+Test Case '-[ShortDramaBoxTests.CrashHardeningTests testUnwrapV1HostileInputs]' passed (0.000 seconds).
+Test Suite 'CrashHardeningTests' passed at 2026-11-11 04:36:19.948.
+	 Executed 18 tests, with 0 failures (0 unexpected) in 7.117 (7.334) seconds
+Test Case '-[ShortDramaBoxTests.DedupeTests testDifferentEpisodeCountStaysSeparate]' passed (0.001 seconds).
+Test Case '-[ShortDramaBoxTests.DedupeTests testEmptyTitleFallsBackToId]' passed (0.001 seconds).
+Test Case '-[ShortDramaBoxTests.DedupeTests testMergeAlternateIsIdempotentAndBidirectional]' passed (0.000 seconds).
+Test Case '-[ShortDramaBoxTests.DedupeTests testSameTitleMergesAndPrefersDouyin]' passed (0.000 seconds).
+Test Case '-[ShortDramaBoxTests.DedupeTests testTitleNormalizationIgnoresSpacesAndPunctuation]' passed (0.001 seconds).
+Test Suite 'DedupeTests' passed at 2026-11-11 04:36:19.956.
+	 Executed 5 tests, with 0 failures (0 unexpected) in 0.003 (0.008) seconds
+Test Case '-[ShortDramaBoxTests.FeedStatusTests testLiveTaskBlocksEveryStatus]' passed (0.001 seconds).
+Test Case '-[ShortDramaBoxTests.FeedStatusTests testLiveTaskStillWaits]' passed (0.000 seconds).
+Test Case '-[ShortDramaBoxTests.FeedStatusTests testPendingAndFailedRetry]' passed (0.000 seconds).
+Test Case '-[ShortDramaBoxTests.FeedStatusTests testProgressAcceptedOnlyWhileResolvingOrDownloading]' passed (0.001 seconds).
+Test Case '-[ShortDramaBoxTests.FeedStatusTests testProgressCannotClobberFailed]' passed (0.001 seconds).
+Test Case '-[ShortDramaBoxTests.FeedStatusTests testProgressCannotClobberReady]' passed (0.001 seconds).
+Test Case '-[ShortDramaBoxTests.FeedStatusTests testProgressCannotRevivePausedItem]' passed (0.000 seconds).
+Test Case '-[ShortDramaBoxTests.FeedStatusTests testReadyNeverRestarts]' passed (0.000 seconds).
+Test Case '-[ShortDramaBoxTests.FeedStatusTests testStuckDownloadingRestartsWhenNoTaskIsRunning]' passed (0.000 seconds).
+Test Suite 'FeedStatusTests' passed at 2026-11-11 04:36:19.988.
+	 Executed 9 tests, with 0 failures (0 unexpected) in 0.005 (0.009) seconds
+Test Case '-[ShortDramaBoxTests.IndexTests testByIDsKeepsOrderAndSkipsUnknown]' passed (2.113 seconds).
+Test Case '-[ShortDramaBoxTests.IndexTests testCreatedFieldIsPresent]' passed (1.193 seconds).
+Test Case '-[ShortDramaBoxTests.IndexTests testFeedKindHasExactlyTwoCases]' passed (0.001 seconds).
+Test Case '-[ShortDramaBoxTests.IndexTests testFeedMixGivesHotShortfallToNew]' passed (0.000 seconds).
+Test Case '-[ShortDramaBoxTests.IndexTests testFeedMixWeightsAreSevenToThree]' passed (0.000 seconds).
+Test Case '-[ShortDramaBoxTests.IndexTests testLikeWildcardsAreEscaped]' passed (1.788 seconds).
+Test Case '-[ShortDramaBoxTests.IndexTests testNewestAdvancesWithoutOverlap]' passed (0.602 seconds).
+Test Case '-[ShortDramaBoxTests.IndexTests testOverlongKeywordIsHandledSafely]' passed (1.164 seconds).
+Test Case '-[ShortDramaBoxTests.IndexTests testPastTheEndReturnsNothingButKeepsTotal]' passed (0.400 seconds).
+Test Case '-[ShortDramaBoxTests.IndexTests testRandomIsUniqueAndHonoursExcluding]' passed (0.637 seconds).
+Test Case '-[ShortDramaBoxTests.IndexTests testSearchFindsTheRecordItCameFrom]' passed (1.785 seconds).
+Test Case '-[ShortDramaBoxTests.IndexTests testSearchOffsetPagingIsDisjoint]' passed (1.590 seconds).
+Test Case '-[ShortDramaBoxTests.IndexTests testSearchResultLimitIsRespected]' passed (0.643 seconds).
+Test Case '-[ShortDramaBoxTests.IndexTests testServerReportsWholeLibrary]' passed (0.384 seconds).
+Test Case '-[ShortDramaBoxTests.IndexTests testTagBucketsAreSortedAndNonEmpty]' passed (0.192 seconds).
+Test Case '-[ShortDramaBoxTests.IndexTests testTagListingIsNewestFirst]' passed (3.475 seconds).
+Test Case '-[ShortDramaBoxTests.IndexTests testTagListingMatchesPerRecordTags]' passed (2.553 seconds).
+Test Case '-[ShortDramaBoxTests.IndexTests testTagListingStartsFromRecent]' passed (0.585 seconds).
+Test Case '-[ShortDramaBoxTests.IndexTests testTagPagingIsDisjointAndCounted]' passed (0.602 seconds).
+Test Case '-[ShortDramaBoxTests.IndexTests testUnknownTagIsEmpty]' passed (0.386 seconds).
+Test Suite 'IndexTests' passed at 2026-11-11 04:36:40.085.
+	 Executed 20 tests, with 0 failures (0 unexpected) in 20.091 (20.097) seconds
+Test Case '-[ShortDramaBoxTests.LogTests testClearRemovesEverything]' passed (0.007 seconds).
+Test Case '-[ShortDramaBoxTests.LogTests testCrashRecordIsKeptAndShownFirst]' passed (0.003 seconds).
+Test Case '-[ShortDramaBoxTests.LogTests testMemoryFootprintIsSane]' passed (0.001 seconds).
+Test Case '-[ShortDramaBoxTests.LogTests testRotationKeepsLatest]' passed (0.020 seconds).
+Test Case '-[ShortDramaBoxTests.LogTests testWriteAndRead]' passed (0.001 seconds).
+Test Case '-[ShortDramaBoxTests.LogTests testWriteImmediatelyVisible]' passed (0.004 seconds).
+Test Suite 'LogTests' passed at 2026-11-11 04:36:40.126.
+	 Executed 6 tests, with 0 failures (0 unexpected) in 0.037 (0.039) seconds
+Test Case '-[ShortDramaBoxTests.OverflowTests testBe64ChunkOffsetStyleValue]' passed (0.001 seconds).
+Test Case '-[ShortDramaBoxTests.OverflowTests testBe64HugeValueClampsInsteadOfTrapping]' passed (0.001 seconds).
+Test Case '-[ShortDramaBoxTests.OverflowTests testBe64NormalAndShortBuffer]' passed (0.001 seconds).
+Test Case '-[ShortDramaBoxTests.OverflowTests testBoxesDropsHuge64BitSizeWithoutTrapping]' passed (0.001 seconds).
+Test Case '-[ShortDramaBoxTests.OverflowTests testBoxesStillParsesNormalBoxes]' passed (0.001 seconds).
+Test Case '-[ShortDramaBoxTests.OverflowTests testTruncatedBoxDoesNotCrash]' passed (0.000 seconds).
+Test Case '-[ShortDramaBoxTests.OverflowTests testZeroSizeBoxTakesRest]' passed (0.000 seconds).
+Test Suite 'OverflowTests' passed at 2026-11-11 04:36:40.132.
+	 Executed 7 tests, with 0 failures (0 unexpected) in 0.004 (0.005) seconds
+Test Case '-[ShortDramaBoxTests.ParsingTests testNumberStringCoercion]' passed (0.048 seconds).
+Test Case '-[ShortDramaBoxTests.ParsingTests testRouterJSONExtractsNestedObject]' passed (0.004 seconds).
+Test Case '-[ShortDramaBoxTests.ParsingTests testRouterJSONHandlesEscapedBackslashBeforeQuote]' passed (0.001 seconds).
+Test Case '-[ShortDramaBoxTests.ParsingTests testRouterJSONIgnoresBracesInsideStrings]' passed (0.001 seconds).
+Test Case '-[ShortDramaBoxTests.ParsingTests testRouterJSONReturnsNilOnNonUTF8]' passed (0.001 seconds).
+Test Case '-[ShortDramaBoxTests.ParsingTests testRouterJSONReturnsNilWhenMarkerMissing]' passed (0.000 seconds).
+Test Case '-[ShortDramaBoxTests.ParsingTests testRouterJSONReturnsNilWhenUnterminated]' passed (0.000 seconds).
+Test Case '-[ShortDramaBoxTests.ParsingTests testSeriesFromFallsBackToSeriesTitle]' passed (0.002 seconds).
+Test Case '-[ShortDramaBoxTests.ParsingTests testSeriesFromPrefersSeriesName]' passed (0.023 seconds).
+Test Case '-[ShortDramaBoxTests.ParsingTests testSeriesFromTolerantOfMissingFields]' passed (0.002 seconds).
+Test Suite 'ParsingTests' passed at 2026-11-11 04:36:40.217.
+	 Executed 10 tests, with 0 failures (0 unexpected) in 0.082 (0.085) seconds
+Test Case '-[ShortDramaBoxTests.PlaybackCenterTests testChurnKeepsSingleOwner]' passed (0.005 seconds).
+Test Case '-[ShortDramaBoxTests.PlaybackCenterTests testConcurrentClaimReleaseDoesNotDeadlockOrCrash]' passed (0.004 seconds).
+Test Case '-[ShortDramaBoxTests.PlaybackCenterTests testFirstClaimStopsNobody]' passed (0.001 seconds).
+Test Case '-[ShortDramaBoxTests.PlaybackCenterTests testReclaimingSameIdDoesNotStopItself]' passed (0.001 seconds).
+Test Case '-[ShortDramaBoxTests.PlaybackCenterTests testReclaimReplacesStopClosure]' passed (0.001 seconds).
+Test Case '-[ShortDramaBoxTests.PlaybackCenterTests testReleaseThenClaimStopsNobody]' passed (0.001 seconds).
+Test Case '-[ShortDramaBoxTests.PlaybackCenterTests testReleaseUnknownIdIsHarmless]' passed (0.001 seconds).
+Test Case '-[ShortDramaBoxTests.PlaybackCenterTests testSecondClaimStopsTheFirst]' passed (0.001 seconds).
+Test Case '-[ShortDramaBoxTests.PlaybackCenterTests testStaleReleaseDoesNotStealOwnershipFromTheNewOwner]' passed (0.001 seconds).
+Test Suite 'PlaybackCenterTests' passed at 2026-11-11 04:36:40.245.
+	 Executed 9 tests, with 0 failures (0 unexpected) in 0.014 (0.027) seconds
+Test Case '-[ShortDramaBoxTests.PlayerLogicTests testBytevc2AndOthersNeedTranscode]' passed (0.012 seconds).
+Test Case '-[ShortDramaBoxTests.PlayerLogicTests testBytevc2EncryptedTrackNeedsTranscode]' passed (0.001 seconds).
+Test Case '-[ShortDramaBoxTests.PlayerLogicTests testCodecCheckIsCaseInsensitive]' passed (0.001 seconds).
+Test Case '-[ShortDramaBoxTests.PlayerLogicTests testH264AndH265ArePlayable]' passed (0.001 seconds).
+Test Case '-[ShortDramaBoxTests.PlayerLogicTests testMediaURLFallsBackToBackup]' passed (0.000 seconds).
+Test Case '-[ShortDramaBoxTests.PlayerLogicTests testMediaURLHandlesPlainAndBase64]' passed (0.003 seconds).
+Test Case '-[ShortDramaBoxTests.PlayerLogicTests testMultiBodyUsesPlatform1024AndMixedMap]' passed (0.001 seconds).
+Test Case '-[ShortDramaBoxTests.PlayerLogicTests testMultiPathIsBatchEndpoint]' passed (0.001 seconds).
+Test Case '-[ShortDramaBoxTests.PlayerLogicTests testNoteDefaultsEmptyAndSurvivesSorting]' passed (0.001 seconds).
+Test Case '-[ShortDramaBoxTests.PlayerLogicTests testParseTracksDropsTracksWithoutURL]' passed (0.010 seconds).
+Test Case '-[ShortDramaBoxTests.PlayerLogicTests testParseTracksHandlesGarbage]' passed (0.001 seconds).
+Test Case '-[ShortDramaBoxTests.PlayerLogicTests testParseTracksReadsNestedMetaAndSpade]' passed (0.001 seconds).
+Test Case '-[ShortDramaBoxTests.PlayerLogicTests testPlayableEncryptedTrackNeedsNoTranscode]' passed (0.000 seconds).
+Test Case '-[ShortDramaBoxTests.PlayerLogicTests testPlayableFiltersOutBytevc2]' passed (0.020 seconds).
+Test Case '-[ShortDramaBoxTests.PlayerLogicTests testProfileOrderIsStable]' passed (0.001 seconds).
+Test Case '-[ShortDramaBoxTests.PlayerLogicTests testPublicFallbackNeverNeedsTranscode]' passed (0.001 seconds).
+Test Case '-[ShortDramaBoxTests.PlayerLogicTests testPublicQualitiesAreDescending]' passed (0.001 seconds).
+Test Case '-[ShortDramaBoxTests.PlayerLogicTests testReasonSummaryMergesDuplicates]' passed (0.001 seconds).
+Test Case '-[ShortDramaBoxTests.PlayerLogicTests testReasonSummarySingleReasonHasNoCount]' passed (0.001 seconds).
+Test Case '-[ShortDramaBoxTests.PlayerLogicTests testRenditionBitrateIsMonotonic]' passed (0.001 seconds).
+Test Case '-[ShortDramaBoxTests.PlayerLogicTests testRenditionMatchingExactShortEdge]' passed (0.001 seconds).
+Test Case '-[ShortDramaBoxTests.PlayerLogicTests testRenditionNearestAtMost]' passed (0.001 seconds).
+Test Case '-[ShortDramaBoxTests.PlayerLogicTests testShortEdgeUsesMinNotWidth]' passed (0.001 seconds).
+Test Case '-[ShortDramaBoxTests.PlayerLogicTests testSortedByShortEdgeThenSize]' passed (0.000 seconds).
+Test Case '-[ShortDramaBoxTests.PlayerLogicTests testTranscodeSourceNilWhenNothingPlayable]' passed (0.000 seconds).
+Test Case '-[ShortDramaBoxTests.PlayerLogicTests testTranscodeSourcePicksHighestPlayable]' passed (0.000 seconds).
+Test Case '-[ShortDramaBoxTests.PlayerLogicTests testUnknownCodecIsNotExcluded]' passed (0.001 seconds).
+Test Suite 'PlayerLogicTests' passed at 2026-11-11 04:36:40.315.
+	 Executed 27 tests, with 0 failures (0 unexpected) in 0.059 (0.070) seconds
+Test Case '-[ShortDramaBoxTests.SourcesTests testSeriesDecodesSourcesWithStableIdentity]' passed (0.003 seconds).
+Test Case '-[ShortDramaBoxTests.SourcesTests testSingleSourceOmitsSourcesAndKeepsFallback]' passed (0.001 seconds).
+Test Case '-[ShortDramaBoxTests.SourcesTests testSourceIdentityDoesNotCollideWithWorkId]' passed (0.001 seconds).
+Test Suite 'SourcesTests' passed at 2026-11-11 04:36:40.320.
+	 Executed 3 tests, with 0 failures (0 unexpected) in 0.004 (0.004) seconds
+Test Case '-[ShortDramaBoxTests.VersionTests testDisplayIsVersionOnly]' passed (0.001 seconds).
+Test Case '-[ShortDramaBoxTests.VersionTests testIsNewer]' passed (0.001 seconds).
+Test Case '-[ShortDramaBoxTests.VersionTests testLatestTagFromPlainTitle]' passed (0.002 seconds).
+Test Case '-[ShortDramaBoxTests.VersionTests testLatestTagFromTitleOnly]' passed (0.001 seconds).
+Test Case '-[ShortDramaBoxTests.VersionTests testLatestTagIgnoresOldBuildTags]' passed (0.000 seconds).
+Test Case '-[ShortDramaBoxTests.VersionTests testLatestTagPrefersNewestEntry]' passed (0.000 seconds).
+Test Case '-[ShortDramaBoxTests.VersionTests testVersionParts]' passed (0.001 seconds).
+Test Suite 'VersionTests' passed at 2026-11-11 04:36:40.366.
+	 Executed 7 tests, with 0 failures (0 unexpected) in 0.005 (0.046) seconds
+Test Case '-[ShortDramaBoxTests.WatchStoreTests testCleanupLeavesNoTestResidue]' passed (0.001 seconds).
+Test Case '-[ShortDramaBoxTests.WatchStoreTests testHistoryIsCapped]' passed (0.091 seconds).
+Test Case '-[ShortDramaBoxTests.WatchStoreTests testRecordThenFind]' passed (0.002 seconds).
+Test Case '-[ShortDramaBoxTests.WatchStoreTests testRemoveDeletesIt]' passed (0.001 seconds).
+Test Case '-[ShortDramaBoxTests.WatchStoreTests testSameSeriesDoesNotDuplicate]' passed (0.002 seconds).
+Test Suite 'WatchStoreTests' passed at 2026-11-11 04:36:40.466.
+	 Executed 5 tests, with 0 failures (0 unexpected) in 0.098 (0.099) seconds
+Test Suite 'ShortDramaBoxTests.xctest' passed at 2026-11-11 04:36:40.466.
+	 Executed 126 tests, with 0 failures (0 unexpected) in 27.518 (27.852) seconds
+Test Suite 'All tests' passed at 2026-11-11 04:36:40.466.
+	 Executed 126 tests, with 0 failures (0 unexpected) in 27.518 (27.853) seconds
