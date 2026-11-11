@@ -784,7 +784,16 @@ class Handler(BaseHTTPRequestHandler):
                     upsert_many(web_rows)
                     items, ids = [], set()
                     # 站方结果按相关度排过序，先放进来；本地命中再去重合并。
-                    for it in [search_json(x) for x in web_rows] + r["items"]:
+                    web_items = []
+                    for x in web_rows:
+                        it = search_json(x)
+                        # 站方结果可能正是某个多来源作品的成员行，归一到作品 id，
+                        # 否则同一部剧会以两个 id 各出现一次。
+                        wid = catalog.work_of(conn(), it["id"])
+                        if wid:
+                            it["id"] = wid
+                        web_items.append(it)
+                    for it in web_items + r["items"]:
                         if it["id"] not in ids:
                             ids.add(it["id"])
                             items.append(it)
@@ -808,23 +817,47 @@ class Handler(BaseHTTPRequestHandler):
             sid = (qs.get("sid") or [""])[0].strip()
             if not sid:
                 return self._send(400, {"ok": False, "error": "missing_sid"})
-            if douyin.is_dy(sid):
-                return self._douyin_detail(sid)
-            sql = ("SELECT sid,title,cover,intro,eps,tags,created,vids"
-                   " FROM series WHERE sid=?")
-            row = conn().execute(sql, (sid,)).fetchone()
-            vids = [v for v in (row[7] or "").split(",") if v] if row else []
-            if not vids:
-                d, fetched = fetch_detail(sid)
-                if d:
-                    # fetch_detail 会 upsert（包括已有行但 vids 为空的情况），
-                    # 这里必须重新查，否则 row[7] 的空串会把刚拿到的 vids 覆盖掉。
-                    row = conn().execute(sql, (sid,)).fetchone()
-                    vids = ([v for v in (row[7] or "").split(",") if v]
-                            if row else fetched)
+            # sid 既可能是作品 id(wid)，也可能是某个来源的 id。以作品为单位
+            # 返回：series.id=wid，series.sources=全部来源；剧集则取用户点开
+            # 的那个来源（换源时客户端传成员 sid），缺省取优先级最高的红果。
+            wid = catalog.work_of(conn(), sid)
+            if not wid:
+                if douyin.is_dy(sid):
+                    return self._douyin_detail(sid)
+                row, vids = self._hg_episodes(sid)
+                if not row:
+                    return self._send(404, {"ok": False, "error": "not_found"})
+                series = catalog.series_json(row)
+                series["eps"] = series["eps"] or len(vids)
+                return self._send(200, {"ok": True, "series": series,
+                                        "episodes": [{"index": i + 1, "vid": v}
+                                                     for i, v in enumerate(vids)]})
+            c = conn()
+            wrow = c.execute(
+                "SELECT wid,title,cover,intro,eps,tags,created,nsrc"
+                " FROM work WHERE wid=?", (wid,)).fetchone()
+            sources = catalog.sources_of(c, [wid]).get(wid) or []
+            if not wrow or not sources:
+                return self._send(404, {"ok": False, "error": "not_found"})
+            target = next((x for x in sources if x["sid"] == sid), sources[0])
+            series = catalog.work_json(wrow, sources)
+            # 徽标/来源名按用户当前点开的来源显示，而不是永远显示红果
+            series["source"] = target["source"]
+            if target["source"] == "dy":
+                try:
+                    _row, eps = self._douyin_load(target["sid"])
+                except Exception as e:
+                    return self._send(502, {"ok": False, "error": "douyin_detail",
+                                            "detail": str(e)[:200]})
+                if not eps:
+                    return self._send(404, {"ok": False, "error": "no_episodes"})
+                series["eps"] = series["eps"] or len(eps)
+                return self._send(200, {
+                    "ok": True, "series": series,
+                    "episodes": [{"index": e["ep"], "vid": e["vid"]} for e in eps]})
+            row, vids = self._hg_episodes(target["sid"])
             if not row:
                 return self._send(404, {"ok": False, "error": "not_found"})
-            series = catalog.series_json(row)
             series["eps"] = series["eps"] or len(vids)
             return self._send(200, {"ok": True, "series": series,
                                     "episodes": [{"index": i + 1, "vid": v}
@@ -894,6 +927,22 @@ class Handler(BaseHTTPRequestHandler):
 
     # ------------------------------------------------ 抖音(第二路上游)
 
+    def _hg_episodes(self, sid):
+        """红果单来源的剧集列表；vids 为空时现拉一次站方详情。"""
+        sql = ("SELECT sid,title,cover,intro,eps,tags,created,vids"
+               " FROM series WHERE sid=?")
+        row = conn().execute(sql, (sid,)).fetchone()
+        vids = [v for v in (row[7] or "").split(",") if v] if row else []
+        if not vids:
+            d, fetched = fetch_detail(sid)
+            if d:
+                # fetch_detail 会 upsert（包括已有行但 vids 为空的情况），
+                # 这里必须重新查，否则 row[7] 的空串会把刚拿到的 vids 覆盖掉。
+                row = conn().execute(sql, (sid,)).fetchone()
+                vids = ([v for v in (row[7] or "").split(",") if v]
+                        if row else fetched)
+        return row, vids
+
     def _douyin_fetch_eps(self, sid):
         """拉整部剧集并写 dy_ep 缓存, 返回缓存行。"""
         eps = douyin.episodes(sid)
@@ -922,25 +971,23 @@ class Handler(BaseHTTPRequestHandler):
                 "SELECT vid,ep,duration_ms,width,height,cover,plays FROM dy_ep"
                 " WHERE sid=? ORDER BY ep", (sid,))]
 
-    def _douyin_detail(self, sid):
-        try:
-            d = douyin.detail(sid)
-        except Exception as e:
-            return self._send(502, {"ok": False, "error": "douyin_detail",
-                                    "detail": str(e)[:200]})
+    def _douyin_load(self, sid):
+        """拉抖音详情并写库；返回 (series_row, episodes)。空列表表示剧下架。"""
+        d = douyin.detail(sid)
         pub = "dy:" + d["sid"]
         now = int(time.time())
+        title = d["name"] or d["real_name"]
         with _db_lock:
             c = conn()
             c.execute(
-                """INSERT INTO series(sid,title,cover,intro,eps,tags,vids,created,updated,source)
-                   VALUES(?,?,?,?,?,?,?,?,?,'dy')
+                """INSERT INTO series(sid,title,cover,intro,eps,tags,vids,created,updated,source,norm)
+                   VALUES(?,?,?,?,?,?,?,?,?,'dy',?)
                    ON CONFLICT(sid) DO UPDATE SET title=excluded.title,
                      cover=excluded.cover, intro=excluded.intro, eps=excluded.eps,
                      tags=excluded.tags, created=excluded.created,
-                     updated=excluded.updated, source='dy'""",
-                (pub, d["name"] or d["real_name"], d["cover"], d["desc"],
-                 d["eps"], ",".join(d["tags"]), "", d["created"], now))
+                     updated=excluded.updated, source='dy', norm=excluded.norm""",
+                (pub, title, d["cover"], d["desc"], d["eps"], ",".join(d["tags"]),
+                 "", d["created"], now, catalog.norm_title(title)))
             c.commit()
             eps = [dict(r) for r in c.execute(
                 "SELECT vid,ep FROM dy_ep WHERE sid=? ORDER BY ep", (pub,))]
@@ -948,14 +995,22 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 eps = self._douyin_fetch_eps(pub)
             except Exception as e:
-                return self._send(502, {"ok": False, "error": "douyin_episodes",
-                                        "detail": str(e)[:200]})
-            if not eps:
-                # 剧下架/需要登录时抖音返回空列表：明确告诉客户端，别给空壳 200
-                return self._send(404, {"ok": False, "error": "no_episodes"})
+                raise RuntimeError(str(e)[:200])
         row = conn().execute(
             "SELECT sid,title,cover,intro,eps,tags,created,source FROM series WHERE sid=?",
             (pub,)).fetchone()
+        return row, eps
+
+    def _douyin_detail(self, sid):
+        """抖音独有作品（还没进 work 视图）的旧路径。"""
+        try:
+            row, eps = self._douyin_load(sid)
+        except Exception as e:
+            return self._send(502, {"ok": False, "error": "douyin_detail",
+                                    "detail": str(e)[:200]})
+        if not eps:
+            # 剧下架/需要登录时抖音返回空列表：明确告诉客户端，别给空壳 200
+            return self._send(404, {"ok": False, "error": "no_episodes"})
         return self._send(200, {"ok": True, "series": catalog.series_json(row),
                                 "episodes": [{"index": e["ep"], "vid": e["vid"]}
                                              for e in eps]})

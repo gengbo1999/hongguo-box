@@ -74,7 +74,7 @@ struct PosterCard: View {
                 if series.episodeCount > 0 {
                     Text("全\(series.episodeCount)集")
                 }
-                if series.alternates?.isEmpty == false {
+                if (series.sources?.count ?? 0) > 1 || series.alternates?.isEmpty == false {
                     Text("可换源")
                         .foregroundStyle(Color(red: 0.10, green: 0.78, blue: 0.85).opacity(0.9))
                 }

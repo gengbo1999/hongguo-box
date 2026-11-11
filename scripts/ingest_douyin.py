@@ -72,6 +72,8 @@ def main():
                     help="比红果 max(created) 还新、暂时判不准的条目写到这个 jsonl（默认放在目录文件旁）")
     ap.add_argument("--keep-pending", action="store_true",
                     help="待定条目也直接入库（默认只入库能确认独有/重合的）")
+    ap.add_argument("--no-rebuild", action="store_true",
+                    help="入库后不重建 work 视图（默认重建，让新剧立刻出现在分类/搜索）")
     args = ap.parse_args()
 
     rows = load_crawl(args.crawl)
@@ -112,10 +114,11 @@ def main():
             pending.append(r)
             continue
         uniq.append(r)
-        batch.append(("dy:" + str(r["sid"]), (r.get("name") or "").strip(),
+        title = (r.get("name") or "").strip()
+        batch.append(("dy:" + str(r["sid"]), title,
                       r.get("cover") or "", "", int(r.get("eps") or 0),
                       ",".join(r.get("cats") or []), "",
-                      created, now, "dy"))
+                      created, now, "dy", norm_title(title)))
 
     total_n = max(len(rows), 1)
     print(f"[diff] 红果已有 {matched}（{matched / total_n:.1%}）；"
@@ -147,14 +150,17 @@ def main():
 
     with c:
         c.executemany(
-            """INSERT INTO series(sid,title,cover,intro,eps,tags,vids,created,updated,source)
-               VALUES(?,?,?,?,?,?,?,?,?,?)
+            """INSERT INTO series(sid,title,cover,intro,eps,tags,vids,created,updated,source,norm)
+               VALUES(?,?,?,?,?,?,?,?,?,?,?)
                ON CONFLICT(sid) DO UPDATE SET title=excluded.title,
                  cover=excluded.cover, eps=excluded.eps, tags=excluded.tags,
-                 created=excluded.created, updated=excluded.updated, source='dy'""", batch)
+                 created=excluded.created, updated=excluded.updated, source='dy',
+                 norm=excluded.norm""", batch)
     total = c.execute("SELECT COUNT(*) FROM series WHERE source='dy'").fetchone()[0]
     pend = c.execute("SELECT COUNT(*) FROM dy_pending").fetchone()[0]
     print(f"[out] 写入 {len(batch)} 条；库内抖音行 {total}；dy_pending {pend}", flush=True)
+    if not args.no_rebuild:
+        catalog.rebuild_works(c)
     return 0
 
 

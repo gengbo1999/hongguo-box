@@ -111,7 +111,18 @@ struct PlayerView: View {
     /// 当前集是否退到了公网明文档；是则给出档位和可切来源。
     private var publicFallback: (quality: String, alt: Series?)? {
         guard let q = qualityOf[current.index], q.hasPrefix("公开") else { return nil }
-        let alt = (series.alternates ?? []).first { $0.id != series.id }
+        // 优先用 works 模型给的 sources（含成员 sid）；老服务端才用 alternates。
+        let alt: Series? = {
+            if let src = series.sources?.first(where: { $0.source == "dy" }) {
+                var s = Series(id: src.sid)
+                s.title = src.title.isEmpty ? series.title : src.title
+                s.cover = series.cover
+                s.episodeCount = src.eps
+                s.source = src.source
+                return s
+            }
+            return (series.alternates ?? []).first { $0.id != series.id }
+        }()
         return (q, alt)
     }
 

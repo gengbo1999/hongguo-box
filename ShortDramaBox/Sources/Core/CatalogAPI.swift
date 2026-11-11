@@ -142,6 +142,13 @@ enum CatalogAPI {
             s.episodeCount = asInt(d["eps"])
             s.tags = asArr(d["tags"]).map { asStr($0) }.filter { !$0.isEmpty }
             s.source = asStr(d["source"])
+            s.sources = asArr(d["sources"]).compactMap { raw in
+                let x = asDict(raw)
+                let sid = asStr(x["sid"])
+                guard !sid.isEmpty else { return nil }
+                return SeriesSource(source: asStr(x["source"]), sid: sid,
+                                    eps: asInt(x["eps"]), title: asStr(x["title"]))
+            }
             return s
         }
     }

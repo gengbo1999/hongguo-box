@@ -11,10 +11,16 @@ struct DetailView: View {
     @State private var playlist: [Episode] = []
     /// 换源后的轻提示（「已切换到抖音源」）。
     @State private var sourceNotice: String?
+    /// 当前正在看的来源 id（可能是作品 id，也可能是某个成员 sid）。
+    @State private var activeSid: String
     @ObservedObject private var store = WatchStore.shared
     @ObservedObject private var follows = FollowStore.shared
 
-    init(series: Series) { self.series = series; _detail = State(initialValue: series) }
+    init(series: Series) {
+        self.series = series
+        _detail = State(initialValue: series)
+        _activeSid = State(initialValue: series.id)
+    }
 
     var body: some View {
         ScrollView {
@@ -81,7 +87,7 @@ struct DetailView: View {
                     SourceBadge(series: detail, fontSize: 10)
                     Text("共 \(max(detail.episodeCount, episodes.count)) 集")
                         .font(.system(size: 12)).foregroundStyle(.secondary)
-                    if !alternates.isEmpty { sourceMenu }
+                    if alternates.count > 1 { sourceMenu }
                 }
                 if !detail.tags.isEmpty {
                     Text(detail.tags.prefix(4).joined(separator: " · "))
@@ -153,11 +159,12 @@ struct DetailView: View {
 
     private func load() async {
         loading = true
-        let sid = detail.id
+        let sid = activeSid
         if let (s, e) = try? await Catalog.detail(sid) {
             if !s.title.isEmpty {
                 var fetched = s
-                // 服务端详情不含「多源」信息，换源列表要保留下来。
+                // 服务端详情已带 sources；只有老服务端才回落到本地 alternates。
+                fetched.sources = fetched.sources ?? detail.sources
                 fetched.alternates = detail.alternates
                 if fetched.source.isEmpty { fetched.source = detail.source }
                 detail = fetched
@@ -191,18 +198,28 @@ struct DetailView: View {
         if merged.count > playlist.count { playlist = merged }
     }
 
-    /// 当前详情之外的可换来源（已合并进来的抖音/红果条目）。
+    /// 可换来源：优先用服务端的 sources，老服务端回落到 alternates。
     private var alternates: [Series] {
-        (detail.alternates ?? []).filter { $0.id != detail.id }
+        if let srcs = detail.sources, !srcs.isEmpty {
+            return srcs.map { src in
+                var s = Series(id: src.sid)
+                s.title = src.title.isEmpty ? detail.title : src.title
+                s.cover = detail.cover
+                s.episodeCount = src.eps
+                s.source = src.source
+                return s
+            }
+        }
+        return (detail.alternates ?? []).filter { $0.id != activeSid }
     }
 
     private var sourceMenu: some View {
         Menu {
-            ForEach([detail] + alternates) { s in
+            ForEach(alternates) { s in
                 Button {
                     Task { await switchSource(to: s) }
                 } label: {
-                    if s.id == detail.id {
+                    if s.id == activeSid {
                         Label("\(s.sourceName)（当前）", systemImage: "checkmark")
                     } else {
                         Text("\(s.sourceName) · \(s.episodeCount) 集")
@@ -220,15 +237,11 @@ struct DetailView: View {
 
     /// 切换到同一部剧的另一个来源；resumeAt 传入时切完自动续播这一集。
     private func switchSource(to s: Series, resumeAt number: Int? = nil) async {
-        guard s.id != detail.id else { return }
-        // 换源后仍要能换回来：把旧来源放进新详情的 alternates。
-        var target = s
-        var old = detail
-        old.alternates = nil
-        var alts = (target.alternates ?? []).filter { $0.id != target.id && $0.id != old.id }
-        alts.insert(old, at: 0)
-        target.alternates = alts
-        detail = target
+        guard s.id != activeSid else { return }
+        // 直接按成员 sid 请求详情：服务端返回该来源的剧集，同时带回全部 sources，
+        // 所以换过去之后菜单里仍然能换回来。
+        activeSid = s.id
+        detail = s
         episodes = []
         playlist = []
         siblings = []

@@ -15,6 +15,17 @@ struct Series: Identifiable, Hashable, Codable {
     /// 同一部剧在其它来源的条目（列表按标题去重后保留，供详情页/播放页「换源」）。
     /// 仅用于内存展示，不参与持久化。
     var alternates: [Series]? = nil
+    /// 服务端 works 模型给出的全部来源（含当前来源）；换源菜单以它为准。
+    var sources: [SeriesSource]? = nil
+}
+
+/// 作品的一个来源：sid 是该来源自己的 id（红果 7704…，抖音 dy:7704…）。
+struct SeriesSource: Identifiable, Hashable, Codable {
+    var source: String = ""
+    var sid: String = ""
+    var eps: Int = 0
+    var title: String = ""
+    var id: String { sid }
 }
 
 struct Episode: Identifiable, Hashable {
