@@ -310,6 +310,12 @@ def parse_tracks(payload):
         data = payload if isinstance(payload, dict) else {}
     lists = []
     vm = data.get("video_model")
+    # 单集接口把 video_model 作为 JSON 字符串直接挂在 data 下
+    if isinstance(vm, str) and vm.lstrip().startswith("{"):
+        try:
+            vm = json.loads(vm)
+        except ValueError:
+            vm = None
     if isinstance(vm, dict) and isinstance(vm.get("video_list"), list):
         lists.append(vm["video_list"])
     if isinstance(data.get("video_list"), list):

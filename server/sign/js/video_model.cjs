@@ -33,6 +33,8 @@
 // 依赖沙箱能力：require('node:crypto')（rootRequire 直通）、Buffer、axios；Node<18 无 SM3 会签名失败。
 
 const crypto = require('node:crypto');
+const { identity: loadIdentity } = require('./device_register.cjs');
+const { headers: playerHeaders } = require('./player_signature.cjs');
 
 // Node 18+ 自带 fetch；这里只实现本文件用到的 axios 子集。
 async function axios(url, opts = {}) {
@@ -461,12 +463,114 @@ function signedVideoRequest(api, payload) {
     return { url, headers, body };
 }
 
+// ---------- 单集播放协议（2026-11-12 起唯一稳定路径） ----------
+// 上游内容接口按「服务端注册过的 device_id + install_id」放行，未注册设备
+// 一律 HTTP 200 + 0 字节；签名必须是真实 Gorgon/Argus/Ladon（旧的伪 Argus /
+// Medusa 组合也会被静默丢弃成空体）。单集接口 schema 与批量接口不同。
+const SINGLE_API = 'https://api5-normal-sinfonlineb.fqnovel.com/novel/player/video_model/v1/';
+const SINGLE_UA = VIDEO_UA.replace('/71332', '/73532');
+const SINGLE_VERSION = { version_code: '73532', version_name: '7.3.5.32', manifest_version_code: '73532', update_version_code: '73532' };
+const REGISTER_COOLDOWN_MS = 10 * 60 * 1000;
+let identityCache = null;
+let lastRegisterAt = 0;
+
+function encodeQuery(value) {
+    return encodeURIComponent(String(value == null ? '' : value))
+        .replace(/[!'()]/g, (ch) => `%${ch.charCodeAt(0).toString(16).toUpperCase()}`);
+}
+
+async function currentIdentity(force = false) {
+    if (force) {
+        const wait = REGISTER_COOLDOWN_MS - (Date.now() - lastRegisterAt);
+        if (wait > 0) throw new Error(`device_register 冷却中，${Math.ceil(wait / 1000)}s 后重试`);
+        lastRegisterAt = Date.now();
+    }
+    identityCache = await loadIdentity({
+        force,
+        device: {
+            channel: DEVICE.channel, os_version: DEVICE.os_version, os_api: DEVICE.os_api,
+            device_type: DEVICE.device_type, device_brand: DEVICE.device_brand,
+            dpi: DEVICE.dpi, resolution: DEVICE.resolution, host_abi: DEVICE.host_abi,
+        },
+    });
+    // 运维逃生口：显式指定设备身份时不再用注册下发的 device_id
+    if (process.env.HG_JS_DEVICE_ID) {
+        identityCache = {
+            device_id: String(process.env.HG_JS_DEVICE_ID),
+            install_id: String(process.env.HG_JS_IID || identityCache.install_id),
+            cookies: {},
+        };
+    }
+    // 旧批量路径的 medusa/deviceProto 也读 DEVICE，一并换成注册身份
+    DEVICE.device_id = identityCache.device_id;
+    DEVICE.iid = identityCache.install_id;
+    return identityCache;
+}
+
+function singleQuery(identity, now) {
+    const values = {
+        iid: identity.install_id, device_id: identity.device_id, ac: 'wifi', channel: DEVICE.channel,
+        aid: '8662', app_name: 'novelread', device_platform: 'android', os: 'android', ssmix: 'a',
+        device_type: DEVICE.device_type, device_brand: DEVICE.device_brand, language: 'zh',
+        os_api: DEVICE.os_api, os_version: DEVICE.os_version,
+        resolution: String(DEVICE.resolution).replace('*', 'x'), dpi: DEVICE.dpi,
+        ...SINGLE_VERSION, _rticket: String(now),
+    };
+    // 键按字典序拼接；签名覆盖的 query 必须与真实 URL 逐字节一致
+    return Object.keys(values).sort().map((key) => `${encodeQuery(key)}=${encodeQuery(values[key])}`).join('&');
+}
+
+/** 单集取流：返回上游原始 JSON（{code:0,data:{video_model:"..."}}）。 */
+async function requestSingle(vid, identity) {
+    const now = Date.now();
+    const query = singleQuery(identity, now);
+    const body = Buffer.from(`{"biz_param":{"need_all_video_definition":true,"video_platform":3},"content_type":1,"video_id":"${str(vid)}"}`);
+    const resp = await fetch(`${SINGLE_API}?${query}`, {
+        method: 'POST',
+        headers: {
+            'User-Agent': SINGLE_UA, Accept: 'application/json', 'Sdk-Version': '2',
+            'X-XS-From-Web': '0', 'Content-Type': 'application/json; charset=utf-8',
+            ...playerHeaders(query, body, identity.device_id, now),
+        },
+        body,
+        signal: AbortSignal.timeout(15000),
+    });
+    const text = await resp.text();
+    if (resp.status !== 200) throw new Error(`single HTTP ${resp.status}`);
+    if (!text) {
+        const e = new Error('single empty body（设备未注册或签名被拒）');
+        e.empty = true;
+        throw e;
+    }
+    const data = jsonBody(text);
+    if (!data) throw new Error('single bad json');
+    const code = Number(data.code == null ? data.Code : data.code);
+    if (Number.isFinite(code) && code !== 0) throw new Error(`single code ${code}: ${data.message || data.Message || ''}`);
+    const inner = data.data || data.Data;
+    if (!inner || !inner.video_model) throw new Error('single no video_model');
+    return data;
+}
+
 async function requestVideoModel(vid) {
     const payload = JSON.stringify({
         biz_param: { detail_page_version: 0, device_level: 3, disable_digg_stat: false, need_all_video_definition: true, need_mp4_align: false, use_os_player: false, use_server_dns: false, video_platform: 1024 },
         mixed_video_id_map: { '1004': [str(vid)] },
     });
     let lastError = null;
+    // 首选：单集接口 + 真实签名（还能顺带把注册身份刷新一遍）
+    try {
+        return await requestSingle(vid, await currentIdentity());
+    } catch (e) {
+        lastError = e;
+        if (e && e.empty) {
+            // 身份被上游注销 / 注册过期：强制重注册一次再试
+            try {
+                return await requestSingle(vid, await currentIdentity(true));
+            } catch (retryError) {
+                lastError = retryError;
+            }
+        }
+    }
     for (const api of [VIDEO_API, VIDEO_API_V1]) {
         try {
             const signed = signedVideoRequest(api, payload);
@@ -486,8 +590,6 @@ async function requestVideoModel(vid) {
 }
 
 
-DEVICE.device_id = '1483706410468393';
-DEVICE.iid = '1483706410472489';
 if (process.env.HG_JS_DEVICE_ID) DEVICE.device_id = String(process.env.HG_JS_DEVICE_ID);
 if (process.env.HG_JS_IID) DEVICE.iid = String(process.env.HG_JS_IID);
 
