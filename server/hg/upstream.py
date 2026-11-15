@@ -454,8 +454,13 @@ def js_video_model(vid, timeout=25):
     return payload
 
 
+# 旧路径总共只给这么多秒；再久客户端已经超时了，多试也没有意义。
+_FALLBACK_BUDGET = 3.0
+
+
 def resolve_tracks(vid, host=None):
     """依次尝试 JS 取流与三条 unidbg 路径，返回 (tracks, 诊断信息)。"""
+    started = time.time()
     notes = []
     try:
         tracks = parse_tracks(js_video_model(vid))
@@ -464,12 +469,22 @@ def resolve_tracks(vid, host=None):
         notes.append("js: no_tracks")
     except UpstreamError as e:
         notes.append(f"js: {e.code}")
+    # 旧路径（unidbg / 伪签名）只有在签名进程真的在时才有意义。11-10 之后
+    # 上游只认单集 + 真实 Gorgon/Argus/Ladon：preload 已 404、multi 换形状回
+    # 400 InvalidRequest。没有签名进程还去挨个试，就是每条白等两三秒，整条
+    # 链 7s+，直接顶穿客户端 6s 超时（客户端判失败 → 回退公网 360p）。
+    if not signer_available():
+        notes.append("legacy: skipped (no signer)")
+        return [], {"path": None, "notes": notes}
     attempts = [
         ("multi1024", lambda: multi_video_model(vid, 1024, host=host)),
         ("multi3", lambda: multi_video_model(vid, 3, host=host)),
         ("single3", lambda: video_model(vid, host=host)),
     ]
     for name, fn in attempts:
+        if time.time() - started > _FALLBACK_BUDGET:
+            notes.append("legacy: budget_exhausted")
+            break
         try:
             payload = fn()
         except UpstreamError as e:

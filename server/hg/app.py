@@ -60,6 +60,9 @@ def conn():
             _conn.row_factory = sqlite3.Row
             _conn.execute("PRAGMA journal_mode=WAL")
             _conn.execute("PRAGMA synchronous=NORMAL")
+            # 多个 handler 线程共用一个连接：写冲突时最多等 5s，不要立刻抛
+            # "database is locked"（以前 /api/search 落库就是这么炸的）。
+            _conn.execute("PRAGMA busy_timeout=5000")
             catalog.ensure_schema(_conn)
         return _conn
 
@@ -152,8 +155,14 @@ def record_track(handler, vid, ok, defs, best, diag, ms, err=None):
 
 def upsert_many(rows):
     """rows: (sid,title,cover,intro,eps,tags,vids,created)"""
-    c = conn()
     now = int(time.time())
+    with _db_lock:
+        c = conn()
+        _upsert_rows(c, rows, now)
+        c.commit()
+
+
+def _upsert_rows(c, rows, now):
     c.executemany(
         """INSERT INTO series(sid,title,cover,intro,eps,tags,vids,created,updated)
            VALUES(?,?,?,?,?,?,?,?,?)
@@ -169,7 +178,6 @@ def upsert_many(rows):
         [(r[0], r[1], r[2] or "", r[3] or "", r[4] or 0, r[5] or "", r[6] or "",
           r[7] or 0, now) for r in rows if r[0] and r[1]],
     )
-    c.commit()
 
 
 def count_series():
@@ -826,7 +834,11 @@ class Handler(BaseHTTPRequestHandler):
                 web_rows, web_total = web_search(q)  # noqa: F841 (total 不再采用)
                 if web_rows:
                     # 先落库，后续同一关键词就能直接走本地；详情调用会补齐 vids。
-                    upsert_many(web_rows)
+                    # 落库失败只影响下次的命中率，不能把这次搜索整个搞挂。
+                    try:
+                        upsert_many(web_rows)
+                    except sqlite3.Error as e:  # noqa: BLE001
+                        print(f"[search] 落库失败 {e!r}", flush=True)
                     items, ids = [], set()
                     # 站方结果按相关度排过序，先放进来；本地命中再去重合并。
                     web_items = []
