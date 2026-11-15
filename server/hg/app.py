@@ -19,6 +19,7 @@ import os
 import re
 import sqlite3
 import struct
+import subprocess
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 import sys
@@ -1315,6 +1316,29 @@ class Handler(BaseHTTPRequestHandler):
     # 媒体不经过服务端: 客户端拿 /api/tracks 给的地址自己拉流并解密。
 
 
+def warm_identity():
+    """启动时先把设备身份注册好，再开始接客。
+
+    pod 重启后的第一次取流要是现注册，冷启动单集能到 6-7s —— 正好撞上
+    客户端 6s 超时，那一集就掉回公网 360p。注册只要一次，后面几十天复用。
+    """
+    script = os.path.normpath(os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "..", "sign", "js",
+        "device_register.cjs"))
+    if not os.path.isfile(script):
+        return
+    t0 = time.time()
+    try:
+        p = subprocess.run([upstream._node_bin(), script],
+                           capture_output=True, timeout=60, check=False)
+    except Exception as e:  # noqa: BLE001 预热失败不影响服务，取流时还会再注册
+        print(f"[warm] 设备注册失败 {e!r}", flush=True)
+        return
+    out = (p.stdout or b"").decode("utf-8", "replace").strip()
+    err = (p.stderr or b"").decode("utf-8", "replace").strip()
+    print(f"[warm] 设备身份 {out or err} {time.time() - t0:.1f}s", flush=True)
+
+
 def main():
     conn()
     if os.environ.get("HG_SEED", "1") != "0":
@@ -1331,6 +1355,7 @@ def main():
         port = int((os.environ.get("PORT") or "").strip() or "8787")
     except ValueError:
         port = 8787
+    threading.Thread(target=warm_identity, daemon=True).start()
     if REFRESH_SEC > 0:
         threading.Thread(target=refresh_loop, daemon=True).start()
         print(f"[crawl] 每 {REFRESH_SEC}s 刷新一次", flush=True)

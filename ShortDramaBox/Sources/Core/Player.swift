@@ -319,7 +319,10 @@ enum PlayerAPI {
         guard let url = comps.url else { return [] }
 
         var req = URLRequest(url: url)
-        req.timeoutInterval = 6
+        // 服务端冷启动（pod 重启后第一次注册 + 取流）实测 6-7s，正好卡在旧
+        // 的 6s 超时上，那一集就静默掉回公网 360p。放到 12s：服务端已经把
+        // 失败路径压到 1s 内，正常请求仍是毫秒级，只有真正的冷启动才等得久。
+        req.timeoutInterval = 12
         req.setValue("application/json", forHTTPHeaderField: "Accept")
         req.setValue("ShortDramaBox-Resolver/1", forHTTPHeaderField: "User-Agent")
 

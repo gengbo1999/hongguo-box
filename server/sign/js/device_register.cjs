@@ -171,3 +171,14 @@ async function identity({ force = false, device = {} } = {}) {
 }
 
 module.exports = { identity, register, parse, ttEncrypt, deviceFile };
+
+// 允许 node device_register.cjs 预热一次（服务端启动时调，别让第一个用户
+// 请求去承担注册的两三秒）。
+if (require.main === module) {
+  identity().then((d) => {
+    console.log(JSON.stringify({ device_id: d.device_id, install_id: d.install_id }));
+  }).catch((e) => {
+    console.error(`device_register: ${e.message}`);
+    process.exit(1);
+  });
+}
