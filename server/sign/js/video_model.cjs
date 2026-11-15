@@ -563,11 +563,19 @@ async function requestVideoModel(vid) {
     } catch (e) {
         lastError = e;
         if (e && e.empty) {
-            // 身份被上游注销 / 注册过期：强制重注册一次再试
-            try {
-                return await requestSingle(vid, await currentIdentity(true));
-            } catch (retryError) {
-                lastError = retryError;
+            // 空体有两种原因：身份被上游注销/过期，或刚注册的新身份还没生效
+            // （注册结果有传播延迟，实测首调偶发空体）。先强制重注册一次，
+            // 还空就等 1s / 1.5s 各再试一次 —— 这比直接失败掉回 360p 划算。
+            let force = true;
+            for (const wait of [0, 1000, 1500]) {
+                if (wait) await new Promise((r) => setTimeout(r, wait));
+                try {
+                    return await requestSingle(vid, await currentIdentity(force));
+                } catch (retryError) {
+                    lastError = retryError;
+                    force = false;
+                    if (!retryError || !retryError.empty) break;
+                }
             }
         }
     }

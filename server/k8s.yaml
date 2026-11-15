@@ -88,8 +88,10 @@ spec:
             timeoutSeconds: 5
             failureThreshold: 5
           resources:
-            requests: {cpu: 200m, memory: 640Mi}
-            limits: {cpu: "1", memory: 1536Mi}
+            # 取流是「每个 vid 起一个 node 子进程」，1 核时 20 路并发要 10s+
+            # （客户端 12s 超时就在边上）。给到 2 核，冷并发压到 4-5s。
+            requests: {cpu: 500m, memory: 640Mi}
+            limits: {cpu: "2", memory: 1536Mi}
       volumes:
         - name: data
           persistentVolumeClaim:

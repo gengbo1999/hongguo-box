@@ -374,8 +374,11 @@ def pick_best(tracks):
 
 
 _JS_SCRIPT = os.environ.get("HG_JS_VIDEO", "/app/sign/js/video_model.cjs")
+# 设备注册脚本与取流脚本同目录；服务端启动时用它预热身份。
+JS_REGISTER = os.environ.get(
+    "HG_JS_REGISTER", os.path.join(os.path.dirname(_JS_SCRIPT), "device_register.cjs"))
 _JS_CACHE = {}
-_JS_TTL = 300
+_JS_TTL = 900
 
 # 落盘缓存钩子（由 app.py 注册到 SQLite）。进程内缓存只活 5 分钟、
 # 且随 pod 重启清空；而冷启动一次 js_video_model 要 6-7 秒，

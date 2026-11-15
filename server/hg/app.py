@@ -1322,10 +1322,11 @@ def warm_identity():
     pod 重启后的第一次取流要是现注册，冷启动单集能到 6-7s —— 正好撞上
     客户端 6s 超时，那一集就掉回公网 360p。注册只要一次，后面几十天复用。
     """
-    script = os.path.normpath(os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), "..", "sign", "js",
-        "device_register.cjs"))
+    # 镜像里脚本在 /app/sign/js（HG_JS_VIDEO 同目录），本地仓库里在
+    # server/sign/js，一律以 upstream 的解析结果为准。
+    script = upstream.JS_REGISTER
     if not os.path.isfile(script):
+        print(f"[warm] 跳过：{script} 不存在", flush=True)
         return
     t0 = time.time()
     try:
