@@ -384,7 +384,11 @@ enum PlayerAPI {
 
     /// 取流（单入口）：先问服务端网关，再走本地直连；全不通抛错。
     static func videoModel(_ vid: String) async throws -> [VideoTrack] {
-        let remote = await remoteTracks(vid)
+        var remote = await remoteTracks(vid)
+        if remote.isEmpty {
+            try? await Task.sleep(nanoseconds: 800_000_000)
+            remote = await remoteTracks(vid)
+        }
         if !remote.isEmpty { return remote }
         for p in profiles {
             if case .success(let t) = await multiAttempt(p, vid: vid), !t.isEmpty { return t }
@@ -515,7 +519,13 @@ enum PlayerAPI {
         let dy = await serverTracks(vid, dy: true)
         if !dy.isEmpty { return sorted(dy) }
         // 1) 服务端签名网关（当前唯一能稳定拿 1080p 的路径）
-        let remote = await remoteTracks(vid)
+        var remote = await remoteTracks(vid)
+        if remote.isEmpty {
+            // 上游偶发 200 空体 / pod 刚重启时，服务端这一下可能真拿不到档位。
+            // 直接往下走会一路掉到公网明文 360p，隔一会儿再问一次就好。
+            try? await Task.sleep(nanoseconds: 800_000_000)
+            remote = await remoteTracks(vid)
+        }
         if !remote.isEmpty { return sorted(remote) }
         reasons.append("网关无档位")
         // 1) 批量接口（本地直连；2026-10 起匿名请求多半返回空体）
