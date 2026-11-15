@@ -19,6 +19,7 @@ import os
 import re
 import sqlite3
 import struct
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 import sys
 import threading
@@ -110,6 +111,43 @@ def _vm_cache_put(vid, payload):
 
 
 upstream.set_cache_hooks(_vm_cache_get, _vm_cache_put)
+
+
+# 取流现场记录: 「客户端又只有 360p」这种报障, 服务端必须能看出是
+# 上游空体 / 只给低档, 还是客户端压根没打到这里。只留最近 400 条。
+_track_events = deque(maxlen=400)
+_track_lock = threading.Lock()
+_track_stats = {"n": 0, "ok": 0, "low": 0, "fail": 0}
+_LOW_DEFS = {"360p", "480p"}
+
+
+def record_track(handler, vid, ok, defs, best, diag, ms, err=None):
+    ua = (handler.headers.get("User-Agent") or "")[:160]
+    ev = {
+        "t": int(time.time()),
+        "vid": str(vid),
+        "ok": bool(ok),
+        "best": best,
+        "defs": list(defs),
+        "ms": int(ms),
+        "err": err,
+        # 只留诊断笔数, 免得把上游原始报错整段回出去
+        "notes": (diag or {}).get("notes"),
+        "ua": ua,
+        "ip": handler.client_address[0] if handler.client_address else "",
+    }
+    with _track_lock:
+        _track_events.append(ev)
+        _track_stats["n"] += 1
+        if ok:
+            _track_stats["ok"] += 1
+        if not ok:
+            _track_stats["fail"] += 1
+        if best in _LOW_DEFS:
+            _track_stats["low"] += 1
+    print(f"[tracks] vid={ev['vid']} ok={ev['ok']} best={best} "
+          f"n={len(defs)} ms={ev['ms']} ip={ev['ip']} ua={ua[:40]!r}"
+          + (f" err={err}" if err else ""), flush=True)
 
 
 def upsert_many(rows):
@@ -756,6 +794,13 @@ class Handler(BaseHTTPRequestHandler):
         qs = urllib.parse.parse_qs(u.query)
         p = u.path.rstrip("/") or "/"
 
+        if p == "/api/diag/tracks":
+            lim = _clamp_int(qs.get("limit"), 50, 1, 400)
+            with _track_lock:
+                items = list(_track_events)[-lim:][::-1]
+                stats = dict(_track_stats)
+            return self._send(200, {"ok": True, "stats": stats, "items": items})
+
         if p in ("/healthz", "/"):
             # 多个探针/客户端会同时打这里, 全局只有一个 _conn, 不加锁会撞出
             # sqlite3.InterfaceError: bad parameter or other API misuse
@@ -873,19 +918,29 @@ class Handler(BaseHTTPRequestHandler):
             if (qs.get("dy") or [""])[0] == "1":
                 return self._send(200, {"ok": False, "error": "not_dy",
                                         "tracks": []})
+            t0 = time.time()
             try:
                 tracks, diag = upstream.resolve_tracks(vid)
             except upstream.UpstreamError as e:
+                record_track(self, vid, False, [], None, None,
+                             (time.time() - t0) * 1000, err=e.code)
                 return self._send(502, {"ok": False, "error": e.code, "detail": e.detail})
             # 只有「加密且没给 spade_a」的档位才真的解不了；红果正常下发的
             # cenc-aes-ctr 档都带 spade_a，客户端会自己解密（见 _decryptable_track）。
             clear = [t for t in tracks if _decryptable_track(t)]
             if tracks and not clear:
                 diag.setdefault("notes", []).append("encrypted: no spade_a key")
+                record_track(self, vid, False,
+                             [t.get("definition") for t in tracks], None, diag,
+                             (time.time() - t0) * 1000, err="encrypted")
                 return self._send(200, {"ok": False, "error": "encrypted",
                                         "best": None, "tracks": [], "diag": diag})
             tracks = clear
             best = upstream.pick_best(tracks)
+            record_track(self, vid, bool(best),
+                         [t.get("definition") for t in tracks],
+                         (best or {}).get("definition"), diag,
+                         (time.time() - t0) * 1000)
             return self._send(200, {"ok": bool(best), "best": best,
                                     "tracks": tracks, "diag": diag})
 
