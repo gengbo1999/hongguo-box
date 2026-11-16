@@ -47,25 +47,43 @@ UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 "
 
 # RLock: /healthz 会在持锁区间里再调 conn(), 可重入才不会自锁
 _db_lock = threading.RLock()
-_conn = None
+_local = threading.local()
+_schema_ready = False
 
 
 # ---------------------------------------------------------------- 数据库
 
-def conn():
-    global _conn
+def _new_conn():
+    """建一条连接；schema 只在第一条上跑一次。"""
+    global _schema_ready
+    os.makedirs(os.path.dirname(DB_PATH) or ".", exist_ok=True)
+    c = sqlite3.connect(DB_PATH, timeout=5)
+    c.row_factory = sqlite3.Row
     with _db_lock:
-        if _conn is None:
-            os.makedirs(os.path.dirname(DB_PATH) or ".", exist_ok=True)
-            _conn = sqlite3.connect(DB_PATH, check_same_thread=False)
-            _conn.row_factory = sqlite3.Row
-            _conn.execute("PRAGMA journal_mode=WAL")
-            _conn.execute("PRAGMA synchronous=NORMAL")
-            # 多个 handler 线程共用一个连接：写冲突时最多等 5s，不要立刻抛
-            # "database is locked"（以前 /api/search 落库就是这么炸的）。
-            _conn.execute("PRAGMA busy_timeout=5000")
-            catalog.ensure_schema(_conn)
-        return _conn
+        if not _schema_ready:
+            c.execute("PRAGMA journal_mode=WAL")
+            catalog.ensure_schema(c)
+            _schema_ready = True
+    # 写冲突时最多等 5s，不要立刻抛 "database is locked"
+    c.execute("PRAGMA busy_timeout=5000")
+    c.execute("PRAGMA synchronous=NORMAL")
+    return c
+
+
+def conn():
+    """每个线程一条连接。
+
+    sqlite3 连接不是线程安全的。以前所有 handler 共用一个带
+    check_same_thread=False 的全局连接，并发一高就抛
+    `InterfaceError: bad parameter or other API misuse`（/api/search 里
+    的 catalog.work_of 最容易中）。改成线程本地连接：WAL 下多读一写，
+    写由 _db_lock + busy_timeout 兜住。
+    """
+    c = getattr(_local, "conn", None)
+    if c is None:
+        c = _new_conn()
+        _local.conn = c
+    return c
 
 
 def db_meta(k, default=None):
