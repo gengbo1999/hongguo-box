@@ -789,6 +789,19 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):  # 安静点
         pass
 
+    def finish(self):
+        # 连接线程结束时把它那条 sqlite 连接关掉。不关的话短连接（探针、curl）
+        # 每条都留一个句柄，靠 GC 回收不可靠，实测 60 条短连接后 /proc/1/fd
+        # 里还挂着 37 个 .db 句柄，跑久了会顶到 ulimit。
+        c = getattr(_local, "conn", None)
+        if c is not None:
+            try:
+                c.close()
+            except Exception:  # noqa: BLE001
+                pass
+            _local.conn = None
+        super().finish()
+
     def _send(self, code, body, ctype="application/json; charset=utf-8", extra=None):
         if isinstance(body, (dict, list)):
             body = jdump(body)
