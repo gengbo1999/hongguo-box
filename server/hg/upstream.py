@@ -491,6 +491,13 @@ _FALLBACK_BUDGET = 3.0
 # 这条是唯一能拿到 1080p 的路，放最前面；失败立刻降级到旧路径，不拖时间。
 _META_CACHE = {}
 _META_TTL = 900
+# 上游对「这个 vid 没有片源」的回答是确定性的（code!=0 / 空体），重试几十次也
+# 一样；这类结果必须短期记住，否则同一个坏 vid 每被点一次就白等一轮上游。
+_META_FAIL = {}
+_META_FAIL_TTL = 600
+# 这些 code 表示「上游明确说没有」，可以跳过后续所有回退路径（JS 路径在全网
+# 失效后每次都要白跑 ~3.7s，正好把客户端 6s 预算烧掉）。
+_META_FINAL = {"upstream_code", "metasec_cached_fail"}
 
 
 def _metasec_module():
@@ -507,10 +514,23 @@ def metasec_status():
     return _metasec_module().status()
 
 
+def _meta_fail(vid):
+    """取「上游明确无片源」的负缓存，命中返回 code。"""
+    hit = _META_FAIL.get(vid)
+    if hit and time.time() - hit[0] < _META_FAIL_TTL:
+        return hit[1]
+    if hit:
+        _META_FAIL.pop(vid, None)
+    return None
+
+
 def _metasec_video_model(vid):
     """metasec 取流 + 进程内/落盘缓存。失败抛 MetaSecError（带 code）。"""
     key = f"metasec:{vid}"
     now = time.time()
+    failed = _meta_fail(vid)
+    if failed:
+        raise UpstreamError("metasec_cached_fail", failed)
     hit = _META_CACHE.get(key)
     if hit and now - hit[0] < _META_TTL:
         return hit[1]
@@ -522,7 +542,15 @@ def _metasec_video_model(vid):
             return cached
     _metasec = _metasec_module()
 
-    payload = _metasec.video_model(vid)
+    try:
+        payload = _metasec.video_model(vid)
+    except Exception as e:  # noqa: BLE001 - 只记录确定性的「无片源」
+        code = getattr(e, "code", type(e).__name__)
+        if code in _META_FINAL - {"metasec_cached_fail"}:
+            _META_FAIL[vid] = (now, code)
+            if len(_META_FAIL) > 2000:
+                _META_FAIL.clear()
+        raise
     _META_CACHE[key] = (now, payload)
     if len(_META_CACHE) > _JS_CACHE_MAX:
         _META_CACHE.clear()
@@ -533,11 +561,17 @@ def _metasec_video_model(vid):
 
 
 def video_model_best(vid):
-    """优先 7.4.3.32 MetaSec（唯一能拿 1080p 的路），失败再退纯 JS 签名。"""
+    """优先 7.4.3.32 MetaSec（唯一能拿 1080p 的路），失败再退纯 JS 签名。
+
+    上游明确回答「没有片源」时直接抛出，不再白跑一遍 JS —— JS 路径在 11-17
+    之后必然失败，每跑一次要 3.7s。
+    """
     try:
         return _metasec_video_model(vid)
     except Exception as e:  # noqa: BLE001 - 任何 metasec 失败都该降级
         metasec_code = getattr(e, "code", type(e).__name__)
+    if metasec_code in _META_FINAL:
+        raise UpstreamError(metasec_code, f"metasec: {metasec_code}") from None
     try:
         return js_video_model(vid)
     except UpstreamError as e:
@@ -545,25 +579,33 @@ def video_model_best(vid):
 
 
 def _resolve_tracks_metasec(vid):
+    """返回 (tracks, note, code)；code 供调用方判断要不要继续回退。"""
     try:
         payload = _metasec_video_model(vid)
     except Exception as e:  # MetaSecError 或签名器缺失，都不该拖慢主链
-        return None, f"metasec: {getattr(e, 'code', type(e).__name__)}"
+        code = getattr(e, "code", type(e).__name__)
+        return None, f"metasec: {code}", code
     tracks = parse_tracks(payload)
     if tracks:
-        return tracks, None
-    return None, "metasec: no_tracks"
+        return tracks, None, None
+    return None, "metasec: no_tracks", "no_tracks"
 
 
 def resolve_tracks(vid, host=None):
     """依次尝试 MetaSec、JS 取流与三条 unidbg 路径，返回 (tracks, 诊断信息)。"""
     started = time.time()
     notes = []
-    tracks, note = _resolve_tracks_metasec(vid)
+    tracks, note, code = _resolve_tracks_metasec(vid)
     if tracks:
         return tracks, {"path": "metasec", "notes": notes}
     if note:
         notes.append(note)
+    # 上游明确说「这个 vid 没有片源」时，后面的路径一条都不可能成功：JS 已在
+    # 11-17 整体失效，unidbg 也要签名进程。继续跑只会白烧 3.7s，客户端 6s
+    # 预算直接耗尽 → 判失败 → 回退公网 360p。
+    if code in _META_FINAL:
+        notes.append("fallback: skipped (metasec definitive)")
+        return [], {"path": None, "notes": notes}
     try:
         tracks = parse_tracks(js_video_model(vid))
         if tracks:
