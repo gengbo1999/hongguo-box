@@ -396,7 +396,31 @@ def _node_bin():
     return os.environ.get("NODE_BIN") or shutil.which("node") or "/usr/local/bin/node"
 
 
+# 失败负缓存：上游 11-17 起对旧签名统一回「HTTP 200 + 0 字节」，一次
+# js_video_model 要 spawn node 依次试单集 / preload / multi，耗时 3.7-6.5 秒。
+# 同一集反复播放会被反复打穿，客户端要等超时才掉 360p，体感就是「特别慢」。
+# 失败结果记 _JS_FAIL_TTL 秒，让后续请求毫秒级失败、立刻走公网档。
+_JS_FAIL = {}
+_JS_FAIL_TTL = 120
+
+
 def js_video_model(vid, timeout=25):
+    key = str(vid)
+    hit = _JS_FAIL.get(key)
+    if hit is not None and time.time() - hit < _JS_FAIL_TTL:
+        raise UpstreamError("js_failed_recent", "upstream rejected a recent attempt")
+    try:
+        payload = _js_video_model_uncached(vid, timeout=timeout)
+    except UpstreamError as e:
+        if len(_JS_FAIL) >= _JS_CACHE_MAX:
+            _JS_FAIL.clear()
+        _JS_FAIL[key] = time.time()
+        raise e
+    _JS_FAIL.pop(key, None)
+    return payload
+
+
+def _js_video_model_uncached(vid, timeout=25):
     """用纯 JS 签名客户端取 video_model。
 
     unidbg 的签名能被上游接收，但 multi_video_model 会判 110001；这套 JS
@@ -461,10 +485,85 @@ def js_video_model(vid, timeout=25):
 _FALLBACK_BUDGET = 3.0
 
 
+
+# 7.4.3.32 MetaSec 取流（hg/hg/metasec.py）。上游 11-17 把取流门槛换到红果
+# 7.4.3.32 的 field13 VM 签名 + 已注册身份，旧 JS/unidbg 路径一律 200+0。
+# 这条是唯一能拿到 1080p 的路，放最前面；失败立刻降级到旧路径，不拖时间。
+_META_CACHE = {}
+_META_TTL = 900
+
+
+def _metasec_module():
+    """镜像里 app.py 是平铺运行(import metasec)，本地/测试里是包(hg.metasec)。"""
+    try:
+        import metasec as module
+    except ImportError:
+        from . import metasec as module
+    return module
+
+
+def metasec_status():
+    """取流链路自检: 签名器/材料/身份/token 是否就绪（给 /healthz 用）。"""
+    return _metasec_module().status()
+
+
+def _metasec_video_model(vid):
+    """metasec 取流 + 进程内/落盘缓存。失败抛 MetaSecError（带 code）。"""
+    key = f"metasec:{vid}"
+    now = time.time()
+    hit = _META_CACHE.get(key)
+    if hit and now - hit[0] < _META_TTL:
+        return hit[1]
+    get = _CACHE_HOOKS["get"]
+    if get is not None:
+        cached = get(key)
+        if cached:
+            _META_CACHE[key] = (now, cached)
+            return cached
+    _metasec = _metasec_module()
+
+    payload = _metasec.video_model(vid)
+    _META_CACHE[key] = (now, payload)
+    if len(_META_CACHE) > _JS_CACHE_MAX:
+        _META_CACHE.clear()
+    put = _CACHE_HOOKS["put"]
+    if put is not None:
+        put(key, payload)
+    return payload
+
+
+def video_model_best(vid):
+    """优先 7.4.3.32 MetaSec（唯一能拿 1080p 的路），失败再退纯 JS 签名。"""
+    try:
+        return _metasec_video_model(vid)
+    except Exception as e:  # noqa: BLE001 - 任何 metasec 失败都该降级
+        metasec_code = getattr(e, "code", type(e).__name__)
+    try:
+        return js_video_model(vid)
+    except UpstreamError as e:
+        raise UpstreamError(e.code, f"{e.detail} (metasec: {metasec_code})") from e
+
+
+def _resolve_tracks_metasec(vid):
+    try:
+        payload = _metasec_video_model(vid)
+    except Exception as e:  # MetaSecError 或签名器缺失，都不该拖慢主链
+        return None, f"metasec: {getattr(e, 'code', type(e).__name__)}"
+    tracks = parse_tracks(payload)
+    if tracks:
+        return tracks, None
+    return None, "metasec: no_tracks"
+
+
 def resolve_tracks(vid, host=None):
-    """依次尝试 JS 取流与三条 unidbg 路径，返回 (tracks, 诊断信息)。"""
+    """依次尝试 MetaSec、JS 取流与三条 unidbg 路径，返回 (tracks, 诊断信息)。"""
     started = time.time()
     notes = []
+    tracks, note = _resolve_tracks_metasec(vid)
+    if tracks:
+        return tracks, {"path": "metasec", "notes": notes}
+    if note:
+        notes.append(note)
     try:
         tracks = parse_tracks(js_video_model(vid))
         if tracks:

@@ -10,5 +10,12 @@ server/hg/*.db-wal
 server/hg/*.db-shm
 __pycache__/
 server/seed/
-server/sign/
+# 签名材料默认不进仓库, 只放行 MetaSec 签名器源码与 7.4.3.32 材料缓存:
+# CI 在干净 clone 上跑 Dockerfile 的 signer 阶段, 没有源码就构建不出 hg-signer。
+server/sign/*
+!server/sign/v5/
+!server/sign/js/
+server/sign/v5/target/
+server/sign/v5/materials/*.part
+server/var/
 server/capture/

@@ -1,0 +1,12 @@
+# 镜像只吃 server/, 客户端源码与本地构建产物不要进上下文。
+# server/sign/v5/target 是本机 cargo 产物(86M), 镜像里由 signer 阶段重新编译。
+.git
+.github
+ShortDramaBox
+build-dd
+dist
+ipa-manifest.txt
+server/sign/v5/target
+**/__pycache__
+**/*.pyc
+server/var

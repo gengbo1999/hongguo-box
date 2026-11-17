@@ -1,0 +1,24 @@
+[package]
+name = "hg-signer"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "红果 7.4.3.32 MetaSec 签名 sidecar（x-medusa v5 + SDI token）"
+
+[dependencies]
+aes = "0.9"
+base64 = "0.23"
+hex = "0.4"
+md-5 = "0.11"
+sha1 = "0.11"
+sm3 = "0.5"
+rand = "0.10"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = "0.4"
+flate2 = "1"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1

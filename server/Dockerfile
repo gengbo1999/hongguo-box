@@ -1,3 +1,14 @@
+# 7.4.3.32 MetaSec 签名器（server/sign/v5 的 Rust crate）。
+# 上游 11-17 起只认红果 7.4.3.32 的 field13 VM 签名, 旧的 JS/unidbg 一律
+# 回 200+0; 这个二进制是唯一能拿到 1080p 档位的路径, 必须烤进镜像。
+# 单独一个阶段, 是因为 rust 工具链 1.5G, 运行镜像只需要 756K 的产物。
+# 用 1-slim 而不是固定 1.100: 滚动 tag 一定存在, 小版本漂移不影响 f13 逻辑
+FROM rust:1-slim-bookworm AS signer
+WORKDIR /build
+COPY server/sign/v5/Cargo.toml server/sign/v5/Cargo.lock ./
+COPY server/sign/v5/src ./src
+RUN cargo build --release --locked
+
 # 短剧盒子服务端镜像
 #
 # 构建上下文是仓库根目录:
@@ -55,7 +66,13 @@ RUN set -eux; \
       mkdir -p /app/seed-index; \
       cp /app/src/seed/index.bin.z /app/seed-index/index.bin.z; \
       cp /app/src/seed/index.bin.z /app/data/index.bin.z; echo "打包了种子索引"; fi; \
-    rm -rf /app/src
+    rm -rf /app/src; \
+    rm -rf /app/sign/v5/target
+
+# 签名器产物; 材料缓存若已在构建上下文里(server/sign/v5/materials)会一起进来,
+# 没有也没关系: 首次取流时按 Range 从 APK 里拉两段解出来, 落到 /app/data 或
+# materials 目录, 之后就不再下载。
+COPY --from=signer /build/target/release/hg-signer /app/sign/v5/hg-signer
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \

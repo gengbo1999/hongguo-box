@@ -1,0 +1,117 @@
+//! X-Gorgon：历史最久的一代签名，对 query + body 做摘要后用 RC4 变种混淆，JS 1:1 移植禁改写法。
+//! 现在仍然必带，但服务端实际校验强度弱于 X-Argus / Medusa。
+
+use crate::constants::{GORGON_PREFIX, GORGON_SDK_VERSION};
+use crate::primitives::{be32, md5_raw, reverse_bits, u32};
+
+/// RC4 变种混淆：KSA 阶段交换写法不同，PRGA 用 `s[(y+y) & 255]` 而非 `s[(s[i]+s[j]) & 255]`。
+/// 这个非标准取样是签名匹配的关键。
+pub fn rc4_gorgon(data: &[u8], key: &[u8]) -> Vec<u8> {
+    debug_assert!(!key.is_empty(), "RC4 密钥不能为空");
+    let mut s: [u8; 256] = [0; 256];
+    for (i, item) in s.iter_mut().enumerate() {
+        *item = i as u8;
+    }
+
+    let mut j: usize = 0;
+    for i in 0..256usize {
+        j = (j + s[i] as usize + key[i % key.len()] as usize) & 255;
+        // ⚠️ 是**赋值**而不是交换。`s[i] = s[j]` 之后 `s[j]` 保持原值，
+        //    与标准 RC4 的 swap 语义不同——这里错一个字符签名就整体失配。
+        s[i] = s[j];
+    }
+
+    let mut out = Vec::with_capacity(data.len());
+    let mut i: usize = 0;
+    let mut j: usize = 0;
+    for &value in data {
+        i += 1;
+        let x = s[i & 255];
+        j += x as usize;
+        let y = s[j & 255];
+        s[i & 255] = y;
+        // 注意这里是 (y + y) 而非 (s[i] + s[j])，与标准 RC4 不同
+        out.push(value ^ s[((y as usize) + (y as usize)) & 255]);
+    }
+    out
+}
+
+/// 计算 x-gorgon 请求头：`[md5(query)[0:4] | md5(body)[0:4] | 4B 空 | sdkVersion(4B LE) | khronos(4B BE)]`
+/// → RC4 混淆 → 逐字节 nibble 交换 + 邻位异或 + 取反 → 前缀 '8404' + 种子 + 标志位 + 密文，hex 编码；`body` GET 传 `None`。
+pub fn x_gorgon(query: &str, body: Option<&[u8]>, khronos: u32, random: u32) -> String {
+    assemble(
+        query,
+        body,
+        khronos,
+        random,
+        [0x40, 0x01],
+        GORGON_SDK_VERSION,
+    )
+}
+
+pub fn x_gorgon_v5(
+    query: &str,
+    body: Option<&[u8]>,
+    khronos: u32,
+    random: u16,
+    flags: [u8; 2],
+) -> String {
+    assemble(
+        query,
+        body,
+        khronos,
+        u32::from(random),
+        flags,
+        crate::medusa_v5::SDK_VERSION_CODE,
+    )
+}
+
+fn assemble(
+    query: &str,
+    body: Option<&[u8]>,
+    khronos: u32,
+    random: u32,
+    frame: [u8; 2],
+    sdk_version: u32,
+) -> String {
+    let sdk = sdk_version.to_le_bytes();
+
+    let query_md5 = md5_raw(query.as_bytes());
+    let body_md5 = body.map(md5_raw).unwrap_or([0u8; 16]);
+
+    let mut input = Vec::with_capacity(20);
+    input.extend_from_slice(&query_md5[0..4]);
+    input.extend_from_slice(&body_md5[0..4]);
+    input.extend_from_slice(&[0u8; 4]);
+    input.extend_from_slice(&sdk);
+    input.extend_from_slice(&be32(khronos));
+
+    let key = [
+        0x4a,
+        frame[0],
+        0x16,
+        ((random >> 8) & 255) as u8,
+        0x47,
+        0x6c,
+        frame[1],
+        (random & 255) as u8,
+    ];
+    let mut out = rc4_gorgon(&input, &key);
+
+    // 逐字节变换：nibble 交换 → 与下一字节异或（末尾回绕到 out[0]）→ 反转比特 → 取反
+    let n = out.len();
+    for i in 0..n {
+        let value = out[i];
+        let swapped = (value >> 4) | (value << 4);
+        let next = if i + 1 < n { out[i + 1] } else { out[0] };
+        out[i] = u32((!((reverse_bits(next ^ swapped)) ^ 20)) as u64) as u8;
+    }
+
+    let mut result = Vec::with_capacity(4 + n);
+    result.extend_from_slice(&GORGON_PREFIX);
+    result.push((random & 255) as u8);
+    result.push(((random >> 8) & 255) as u8);
+    result.extend_from_slice(&frame);
+    result.extend_from_slice(&out);
+    hex::encode(result)
+}

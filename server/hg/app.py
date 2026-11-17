@@ -852,6 +852,12 @@ class Handler(BaseHTTPRequestHandler):
                     "catalog_index_at": db_meta("tag_index_at"),
                 }
             body["signer"] = upstream.signer_available()
+            # 取流的关键是 metasec: 旧 signer( unidbg/JS ) 对 7.4.3.32 上游
+            # 一律 200+0, 看 metasec 状态才知道 /api/tracks 会不会掉 360p。
+            try:
+                body["metasec"] = upstream.metasec_status()
+            except Exception as e:  # noqa: BLE001 - 诊断接口不能因此 500
+                body["metasec"] = {"error": repr(e)[:120]}
             return self._send(200, body)
 
         if p == "/api/nav":
@@ -1299,14 +1305,14 @@ class Handler(BaseHTTPRequestHandler):
         query = body.get("query") if isinstance(body.get("query"), dict) else {}
         payload = body.get("body")
 
-        # 取流接口走纯 JS 签名客户端：unidbg 对 multi_video_model 会被判
-        # 110001，JS 实现配已注册设备可稳定返回 1080p。其余接口保持原样。
+        # 取流接口优先走 7.4.3.32 MetaSec（红果 APK 7.4.3.32 的 field13 签名 +
+        # 已注册身份）；上游 11-17 起旧的 JS/unidbg 签名一律 200+0。其余接口保持原样。
         if path.startswith(("/novel/player/multi_video_model/",
                             "/novel/player/video_model/")):
             vids = self._wanted_vids(payload)
             if vids:
                 try:
-                    got = upstream.js_video_model(vids[0])
+                    got = upstream.video_model_best(vids[0])
                     got = self._normalize_video_model(got, payload)
                     if got.get("drm_blocked"):
                         return self._send(200, {"ok": False, "error": "encrypted",
@@ -1371,6 +1377,34 @@ def warm_identity():
     print(f"[warm] 设备身份 {out or err} {time.time() - t0:.1f}s", flush=True)
 
 
+def warm_metasec():
+    """把 7.4.3.32 签名链在启动时就点着。
+
+    要预热三样: field13 镜像(材料缓存, 首次还要从 APK 拉 5.4MB)、设备身份、
+    SDI token。都在这里做完, pod 重启后的第一次 /api/tracks 就只剩一次 HTTP,
+    不会因为冷启动顶穿客户端 8s 超时掉 360p。
+    """
+    try:
+        _ms = upstream._metasec_module()
+    except ImportError:
+        print("[warm] metasec 模块缺失, /api/tracks 将回退旧签名", flush=True)
+        return
+    if not _ms.available():
+        print(f"[warm] metasec 跳过: 没有签名器 {_ms._BIN}", flush=True)
+        return
+    t0 = time.time()
+    try:
+        _ms._ensure_materials()
+        ident = _ms.identity()
+        device = _ms._device_profile(ident)
+        _ms.token(device)
+    except Exception as e:  # noqa: BLE001 预热失败不影响服务, 取流时会再试
+        print(f"[warm] metasec 失败 {e!r}", flush=True)
+        return
+    print(f"[warm] metasec 就绪 device={ident.get('device_id')} "
+          f"{time.time() - t0:.1f}s", flush=True)
+
+
 def main():
     conn()
     if os.environ.get("HG_SEED", "1") != "0":
@@ -1388,6 +1422,7 @@ def main():
     except ValueError:
         port = 8787
     threading.Thread(target=warm_identity, daemon=True).start()
+    threading.Thread(target=warm_metasec, daemon=True).start()
     if REFRESH_SEC > 0:
         threading.Thread(target=refresh_loop, daemon=True).start()
         print(f"[crawl] 每 {REFRESH_SEC}s 刷新一次", flush=True)

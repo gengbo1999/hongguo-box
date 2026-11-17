@@ -1,0 +1,44 @@
+//! 变种 MD5 累加器：X-Argus 的分支选择与校验和都依赖这两个非标准函数，JS 1:1 移植禁改写法。
+//! **不能用标准 MD5 替代**。
+
+use super::bits::u32;
+
+/// 分支判定的初始向量递推，对应 JS 的 `getIv(iv, data)`：按字节下标奇偶走两条不同的递推式（无符号 32 位语义）。
+pub fn get_iv(iv: u32, data: &[u8]) -> u32 {
+    let mut value = u32(iv as u64);
+    for (i, &byte) in data.iter().enumerate() {
+        if (i & 1) == 0 {
+            value = u32(((value >> 4) ^ value ^ (value << 6) ^ byte as u32) as u64);
+        } else {
+            // JS: ~((value >>> 7) ^ value ^ (data[i] | (value << 12)))
+            let inner = (value >> 7) ^ value ^ (byte as u32 | value << 12);
+            value = u32(!inner as u64);
+        }
+    }
+    value
+}
+
+/// 自定义累加和（JS `sumMd5`），返回 32 位；传入长度必须 ≥ 12（JS 版依赖调用方保证）。
+pub fn sum_md5(data: &[u8]) -> u32 {
+    debug_assert!(data.len() >= 12, "sum_md5 需要至少 12 字节输入");
+    let mut check: u32 = 0x2022_0420;
+
+    for i in 0..12usize {
+        let temp = if (i & 1) == 0 {
+            (check >> 3) ^ check
+        } else {
+            (check >> 5) ^ check
+        };
+        check = if (i & 1) == 0 {
+            data[i] as u32 ^ (check << 7)
+        } else {
+            data[i] as u32 | (check << 11)
+        };
+        if (i & 1) != 0 {
+            check = !check;
+        }
+        check = u32((check ^ temp) as u64);
+    }
+
+    u32(((check | 4) ^ 0x0100_0000) as u64)
+}
