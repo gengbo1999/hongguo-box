@@ -42,7 +42,17 @@ APK_URL = os.environ.get(
 DEX_RANGE = (64_901_723, 3_915_212)
 ELF_RANGE = (112_946_914, 1_497_823)
 
-_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+def _pick_root():
+    """仓库里是 server/hg/metasec.py(根 = server), 镜像里是平铺的 /app/metasec.py
+    (根 = /app)。两种布局都要能找到 sign/: 先看上一级, 再看自己这一级。"""
+    here = os.path.dirname(os.path.abspath(__file__))
+    for candidate in (os.path.dirname(here), here):
+        if os.path.isdir(os.path.join(candidate, "sign")):
+            return candidate
+    return os.path.dirname(here)
+
+
+_ROOT = _pick_root()
 _SIGN_DIR = os.environ.get("HG_SIGN_DIR", os.path.join(_ROOT, "sign", "v5"))
 def _first_file(*candidates):
     for path in candidates:
