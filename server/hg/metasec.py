@@ -346,8 +346,28 @@ def _payload(vid, device_level):
     }
 
 
-def video_model(vid, device_level=3, cookie=None, timeout=15):
-    """取单集的 video_model（含全部档位）。返回上游 JSON。"""
+# 取流时的 device_level。上游按这个值决定回哪套编码：
+#   level 1 -> bytevc1（H.265，iOS/AVPlayer 能直接解）
+#   level 2/3 -> bytevc2（H.266/VVC，iOS 没有解码器）
+# 2026-11 的新剧一上线就只有 bytevc2，客户端拿到后 needsTranscode 为真、
+# 又找不到可播档位转码，直接报「加载失败」——所以固定要 level 1。
+# 上游对老剧（只有 bytevc1 片源）三个 level 结果一致，改这里不损失档位。
+_DEVICE_LEVEL = int(os.environ.get("HG_METASEC_DEVICE_LEVEL") or 1)
+
+
+def default_device_level():
+    """默认 device_level（配置项，默认 1 = bytevc1）。"""
+    return _DEVICE_LEVEL
+
+
+def video_model(vid, device_level=None, cookie=None, timeout=15):
+    """取单集的 video_model（含全部档位）。返回上游 JSON。
+
+    device_level 省略时用 `HG_METASEC_DEVICE_LEVEL`（默认 1），
+    显式传值只用于排查对比。
+    """
+    if device_level is None:
+        device_level = _DEVICE_LEVEL
     if not available():
         raise MetaSecError("signer_missing", _BIN)
     _ensure_materials()
@@ -405,6 +425,7 @@ def status():
         "materials": os.path.isfile(_CACHE),
         "identity_script": os.path.isfile(_IDENT_JS),
         "origin": ORIGIN,
+        "device_level": _DEVICE_LEVEL,
     }
     state = _load_state()
     out["cdid"] = bool(state.get("cdid"))

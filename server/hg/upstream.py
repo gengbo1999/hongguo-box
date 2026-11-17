@@ -497,7 +497,19 @@ _META_FAIL = {}
 _META_FAIL_TTL = 600
 # 这些 code 表示「上游明确说没有」，可以跳过后续所有回退路径（JS 路径在全网
 # 失效后每次都要白跑 ~3.7s，正好把客户端 6s 预算烧掉）。
-_META_FINAL = {"upstream_code", "metasec_cached_fail"}
+_META_FINAL = {"upstream_code", "metasec_cached_fail", "codec_unplayable"}
+
+# 客户端（ShortDramaBox）能硬解/直播的 codec，与 Player.swift 的
+# `isPlayableCodec` 保持一致。上游按 device_level 可能整集只给 bytevc2
+# （H.266/VVC，iOS 无解码器）：这种档位客户端一条都播不了，还会因为
+# 「找不到可转码源」直接报「加载失败」。整集不可播时按「无档位」处理，
+# 让客户端回退到公网明文源，而不是给一堆它解不开的东西。
+_PLAYABLE_CODECS = {"bytevc1", "hvc1", "hev1", "h265", "hevc", "avc1", "avc3", ""}
+
+
+def _playable_codec(track):
+    """档位的编码客户端能不能直接播（加密不影响，客户端会解 spade）。"""
+    return str(track.get("codec") or "").strip().lower() in _PLAYABLE_CODECS
 
 
 def _metasec_module():
@@ -524,9 +536,19 @@ def _meta_fail(vid):
     return None
 
 
+def _meta_key(vid):
+    """缓存 key 带上 device_level：换 level 就换了编码/直链，不能复用旧值。"""
+    level = 1
+    try:
+        level = _metasec_module().default_device_level()
+    except Exception:  # noqa: BLE001 - 签名器缺失时退化为默认值
+        pass
+    return f"metasec:l{level}:{vid}"
+
+
 def _metasec_video_model(vid):
     """metasec 取流 + 进程内/落盘缓存。失败抛 MetaSecError（带 code）。"""
-    key = f"metasec:{vid}"
+    key = _meta_key(vid)
     now = time.time()
     failed = _meta_fail(vid)
     if failed:
@@ -586,8 +608,10 @@ def _resolve_tracks_metasec(vid):
         code = getattr(e, "code", type(e).__name__)
         return None, f"metasec: {code}", code
     tracks = parse_tracks(payload)
-    if tracks:
+    if tracks and any(_playable_codec(t) for t in tracks):
         return tracks, None, None
+    if tracks:
+        return None, "metasec: codec_unplayable", "codec_unplayable"
     return None, "metasec: no_tracks", "no_tracks"
 
 
