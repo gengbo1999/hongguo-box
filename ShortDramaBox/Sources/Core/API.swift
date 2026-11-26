@@ -122,6 +122,13 @@ enum Catalog {
         if seriesId.hasPrefix("dy:") {
             return try await serverDetail(seriesId)
         }
+        // 站方详情页从 2026-11 起把 `vid_list` 换成了 `v1_...` 不透明 token，
+        // 上游取流接口不认（返回空 data），整部剧就掉到公网 360p。服务端
+        // `/api/detail` 会用 multi_video_detail 把每集换回数字 vid，所以
+        // 详情以它为准；只有服务端不可达时才退回站方（此时仅剩 360p 兜底）。
+        if let (s, eps) = try? await serverDetail(seriesId), !eps.isEmpty {
+            return (s, eps)
+        }
         guard let j = routerJSON(try await friendlyGet("\(base)/detail?series_id=\(seriesId)", what: "该短剧不存在或已下架")) else { throw ApiError.noData }
         let sd = asDict(asDict(asDict(j["loaderData"])["detail_page"])["seriesDetail"])
         var s = seriesFrom(sd)
@@ -158,7 +165,7 @@ enum Catalog {
         s.episodeCount = asInt(d["eps"])
         s.tags = asArr(d["tags"]).map { asStr($0) }
         s.source = asStr(d["source"])
-        if s.title.isEmpty {
+        if s.title.isEmpty && seriesId.hasPrefix("dy:") {
             s.title = "抖音短剧"
         }
 

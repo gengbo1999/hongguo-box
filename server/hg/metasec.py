@@ -30,6 +30,7 @@ import urllib.request
 ORIGIN = os.environ.get("HG_METASEC_ORIGIN", "https://api5-normal-sinfonlineb.fqnovel.com")
 PLAYER_PATH = "/novel/player/multi_video_model/player/v1"
 PRELOAD_PATH = "/novel/player/multi_video_model/preload/v1"
+DETAIL_PATH = "/novel/player/multi_video_detail/v1"
 SDI_ORIGIN = "https://mssdk.zijieapi.com"
 SDI_PATH = "/sdi/get_token"
 
@@ -328,22 +329,31 @@ def _post(url, body, headers, timeout=15):
         return exc.code, exc.read(), dict(exc.headers)
 
 
+def _biz_param(device_level):
+    return {
+        "detail_page_version": 0,
+        "device_level": device_level,
+        "disable_digg_stat": False,
+        "disable_video_relate_book": False,
+        "need_all_video_definition": True,
+        "need_mp4_align": False,
+        "use_os_player": False,
+        "use_server_dns": False,
+        "video_platform": 1024,
+    }
+
+
 def _payload(vid, device_level):
     return {
-        "biz_param": {
-            "detail_page_version": 0,
-            "device_level": device_level,
-            "disable_digg_stat": False,
-            "disable_video_relate_book": False,
-            "need_all_video_definition": True,
-            "need_mp4_align": False,
-            "use_os_player": False,
-            "use_server_dns": False,
-            "video_platform": 1024,
-        },
+        "biz_param": _biz_param(device_level),
         "mixed_video_id_map": {"1004": [str(vid)]},
         "dr_scene": "player",
     }
+
+
+def _detail_payload(sid):
+    """分集详情：站点详情页只给 v1_ 不透明 token，上游按 series_id 换每集数字 vid。"""
+    return {"series_id": str(sid), "biz_param": _biz_param(_DEVICE_LEVEL)}
 
 
 # 取流时的 device_level。上游按这个值决定回哪套编码：
@@ -360,50 +370,36 @@ def default_device_level():
     return _DEVICE_LEVEL
 
 
-def video_model(vid, device_level=None, cookie=None, timeout=15):
-    """取单集的 video_model（含全部档位）。返回上游 JSON。
-
-    device_level 省略时用 `HG_METASEC_DEVICE_LEVEL`（默认 1），
-    显式传值只用于排查对比。
-    """
-    if device_level is None:
-        device_level = _DEVICE_LEVEL
+def _signed_json(path, payload_obj, cookie=None, timeout=15):
+    """把 payload 交给 hg-signer 签名后 POST 到 origin+path，返回解析后的 JSON。"""
     if not available():
         raise MetaSecError("signer_missing", _BIN)
     _ensure_materials()
     ident = identity()
     dev = _device_profile(ident)
-    token_value = token(dev)
-    body = json.dumps(_payload(vid, device_level), separators=(",", ":")).encode()
-    signed = _call(
-        op="sign",
-        device=dev,
-        origin=ORIGIN,
-        path=PLAYER_PATH,
-        body=base64.b64encode(body).decode(),
-        token=token_value,
-    )
-    headers = dict(signed["headers"])
-    headers["Cookie"] = cookie if cookie is not None else ident.get("cookies", "")
-    status, raw, resp_headers = _post(
-        signed["url"], base64.b64decode(signed["body"]), headers, timeout=timeout
-    )
-    if status == 200 and not raw:
-        # 静默拒绝：token 大概率过期/被判失效，强制换一次再试
-        token_value = token(dev, force=True)
+    body = json.dumps(payload_obj, separators=(",", ":")).encode()
+    cookie_value = cookie if cookie is not None else ident.get("cookies", "")
+
+    def send(token_value):
         signed = _call(
             op="sign",
             device=dev,
             origin=ORIGIN,
-            path=PLAYER_PATH,
+            path=path,
             body=base64.b64encode(body).decode(),
             token=token_value,
         )
         headers = dict(signed["headers"])
-        headers["Cookie"] = cookie if cookie is not None else ident.get("cookies", "")
-        status, raw, resp_headers = _post(
+        headers["Cookie"] = cookie_value
+        return _post(
             signed["url"], base64.b64decode(signed["body"]), headers, timeout=timeout
         )
+
+    token_value = token(dev)
+    status, raw, resp_headers = send(token_value)
+    if status == 200 and not raw:
+        # 静默拒绝：token 大概率过期/被判失效，强制换一次再试
+        status, raw, resp_headers = send(token(dev, force=True))
     if status != 200:
         raise MetaSecError("http_status", f"{status} {(raw or b'')[:120]!r}")
     if not raw:
@@ -416,6 +412,28 @@ def video_model(vid, device_level=None, cookie=None, timeout=15):
     if code not in (0, "0", None):
         raise MetaSecError("upstream_code", f"{code} {payload.get('message') or ''}"[:200])
     return payload
+
+
+def video_model(vid, device_level=None, cookie=None, timeout=15):
+    """取单集的 video_model（含全部档位）。返回上游 JSON。
+
+    device_level 省略时用 `HG_METASEC_DEVICE_LEVEL`（默认 1），
+    显式传值只用于排查对比。
+    """
+    if device_level is None:
+        device_level = _DEVICE_LEVEL
+    return _signed_json(PLAYER_PATH, _payload(vid, device_level),
+                        cookie=cookie, timeout=timeout)
+
+
+def series_detail(sid, cookie=None, timeout=15):
+    """取整部剧的分集详情（`video_list[].vid` 是上游数字视频 id）。
+
+    站点详情页的 `vid_list` 从 2026-11 起改成了 `v1_...` 不透明 token，
+    上游 multi_video_model 对这种 token 只回 `code:0 + data:{}`（等于没有
+    片源）；这个接口按 series_id 把每集的数字 vid 换回来。
+    """
+    return _signed_json(DETAIL_PATH, _detail_payload(sid), cookie=cookie, timeout=timeout)
 
 
 def status():

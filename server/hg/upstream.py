@@ -600,6 +600,50 @@ def video_model_best(vid):
         raise UpstreamError(e.code, f"{e.detail} (metasec: {metasec_code})") from e
 
 
+_DETAIL_CACHE = {}
+_DETAIL_TTL = 300
+
+
+def series_episodes(sid):
+    """红果剧集详情 -> (按集序的数字 vid 列表, video_data 元数据)。
+
+    站点详情页的 `vid_list` 从 2026-11 起换成了 `v1_` 不透明 token，上游
+    `multi_video_model` 对它们只回 `code:0 + data:{}`（表现为整部剧掉到
+    公网 360p）。`multi_video_detail` 按 series_id 给出每集真正的数字 vid。
+    """
+    key = str(sid)
+    hit = _DETAIL_CACHE.get(key)
+    if hit and time.time() - hit[0] < _DETAIL_TTL:
+        return hit[1], hit[2]
+    payload = _metasec_module().series_detail(key)
+    data = payload.get("data") if isinstance(payload, dict) else None
+    entry = data.get(key) if isinstance(data, dict) else None
+    if not isinstance(entry, dict) and isinstance(data, dict) and data:
+        entry = next((v for v in data.values() if isinstance(v, dict)), None)
+    vd = (entry or {}).get("video_data") or {}
+    items = []
+    for e in vd.get("video_list") or []:
+        if not isinstance(e, dict):
+            continue
+        v = str(e.get("vid") or "")
+        if v.isdigit() and 8 <= len(v) <= 24:
+            try:
+                idx = int(e.get("vid_index") or 0)
+            except (TypeError, ValueError):
+                idx = 0
+            items.append((idx, v))
+    items.sort()
+    vids = [v for _, v in items]
+    # 只留元数据字段，不缓存整份 video_list（193 集 × 每部剧，500 部就是几十 MB）
+    meta = {k: vd.get(k) for k in (
+        "series_id", "series_title", "series_cover", "series_intro",
+        "episode_cnt", "category_schema")}
+    _DETAIL_CACHE[key] = (time.time(), vids, meta)
+    if len(_DETAIL_CACHE) > 512:
+        _DETAIL_CACHE.clear()
+    return vids, meta
+
+
 def _resolve_tracks_metasec(vid):
     """返回 (tracks, note, code)；code 供调用方判断要不要继续回退。"""
     try:

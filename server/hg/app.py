@@ -589,21 +589,55 @@ def refresh_loop():
             print(f"[crawl] 异常 {e!r}", flush=True)
 
 
+def _numeric_vids(vids):
+    """只保留上游认的数字视频 id（v1_... 之类是站方 token，取流接口不认）。"""
+    return [v for v in vids if isinstance(v, str) and re.fullmatch(r"[0-9]{8,24}", v)]
+
+
 def fetch_detail(sid):
+    """拉一部剧的元数据 + 每集数字 vid。
+
+    站方详情页的 `vid_list` 从 2026-11 起换成了 `v1_...` 不透明 token，
+    上游 `multi_video_model` 对它们只回空 data，表现为整部剧掉到公网 360p。
+    这里优先用 `multi_video_detail` 按 series_id 换回数字 vid；站点详情只
+    负责元数据与兜底（它仍能给 360p 公网源）。
+    """
+    sid = _s(sid)
+    sd = None
     try:
         j = router_json(http_text(f"{SITE}/detail?series_id={urllib.parse.quote(sid)}"))
+        ld = (j or {}).get("loaderData") or {}
+        dp = ld.get("detail_page") or {}
+        sd = dp.get("seriesDetail") if isinstance(dp, dict) else None
+        if not isinstance(sd, dict):
+            sd = None
     except Exception as e:  # 红果对未知 sid 会回 500，别让它把请求线程打崩
-        print(f"[detail] {sid!r} 上游失败 {e!r}", flush=True)
+        print(f"[detail] {sid!r} 站方详情失败 {e!r}", flush=True)
+    site_vids = [_s(v) for v in ((sd or {}).get("vid_list") or []) if _s(v)]
+    vids = _numeric_vids(site_vids)
+    vd = {}
+    if not vids:
+        try:
+            fetched, vd = upstream.series_episodes(sid)
+            vids = _numeric_vids(fetched)
+        except Exception as e:  # noqa: BLE001 - 上游失败仍可用站点 token 回 360p
+            print(f"[detail] {sid!r} 上游分集详情失败 {e!r}", flush=True)
+    row = series_row(sd) if sd else None
+    if row is None and isinstance(vd, dict) and vd:
+        meta = dict(vd)
+        meta["series_id"] = _s(vd.get("series_id")) or sid
+        cats = vd.get("category_schema")
+        if isinstance(cats, str):
+            try:
+                cats = json.loads(cats)
+            except ValueError:
+                cats = []
+        meta["tags"] = [_s(x.get("name")) for x in cats if isinstance(x, dict)] if isinstance(cats, list) else []
+        row = series_row(meta)
+    if row is None:
         return None, []
-    if not j:
-        return None, []
-    ld = j.get("loaderData") or {}
-    dp = ld.get("detail_page") or {}
-    sd = dp.get("seriesDetail") if isinstance(dp, dict) else None
-    if not isinstance(sd, dict):
-        return None, []
-    row = series_row(sd)
-    vids = [_s(v) for v in (sd.get("vid_list") or []) if _s(v)]
+    if not vids:
+        vids = site_vids
     if vids:
         upsert_many([(row[0], row[1], row[2], row[3], row[4] or len(vids),
                       row[5], ",".join(vids), row[7])])
@@ -1038,7 +1072,9 @@ class Handler(BaseHTTPRequestHandler):
                " FROM series WHERE sid=?")
         row = conn().execute(sql, (sid,)).fetchone()
         vids = [v for v in (row[7] or "").split(",") if v] if row else []
-        if not vids:
+        # 老缓存可能是站方的 v1_ token：上游取流接口不认，必须换回数字 vid。
+        stale = bool(vids) and not all(re.fullmatch(r"[0-9]{8,24}", v) for v in vids)
+        if not vids or stale:
             d, fetched = fetch_detail(sid)
             if d:
                 # fetch_detail 会 upsert（包括已有行但 vids 为空的情况），
