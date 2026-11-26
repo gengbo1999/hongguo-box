@@ -87,6 +87,21 @@
    - iOS 同时只能开一个 VPN：LocalDevVPN 和你平时用的代理（Shadowrocket 等）互斥，续签/装 App 时切到 LocalDevVPN，平时可以切回代理。
    - 免费账号最多 3 个自签 App（含 SideStore 自身），装本 App 后还剩 1 个名额。
 
+#### 一键续签快捷指令（可选）
+
+不想每周手动点 Refresh All，可以直接用这个快捷指令（iOS 16.4+）：
+
+**https://www.icloud.com/shortcuts/8fb73d0972ae424786e54f754fdd1085**
+
+它按顺序做 5 件事：连接 LocalDevVPN → 等 2 秒 → 调用 SideStore 的 Refresh All Apps → 发一条「续签成功」通知 → 断开 LocalDevVPN。
+
+1. iPhone 上用 Safari 打开链接，点「添加快捷指令」。
+2. 首次运行会请求 VPN 权限，选「允许」。若提示找不到 LocalDevVPN，先手动打开它连一次再运行。
+3. 想全自动：快捷指令 → 自动化 → 新建（时间，如每周日 03:00；或 Wi-Fi 连上常用网络时）→ 添加「运行快捷指令」→ 选「刷新所有app签名」→ 关闭「运行前询问」。
+4. 需要 SideStore 0.7.0 及以上；SideStore 未安装或版本过旧时，快捷指令里的 Refresh All Apps 动作会报错。
+
+> 锁屏、低电量模式下 iOS 可能跑不完整个流程；失败就手动打开一次 SideStore 点 Refresh All 兜底。
+
 ## 功能
 
 五个标签页：
