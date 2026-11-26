@@ -66,7 +66,8 @@
 **步骤**：
 
 1. **电脑装 SideStore**：USB 连上 iPhone，手机上点「信任」。打开 iloader，登录 Apple ID，选中设备，安装 SideStore。
-   - 如果 iloader 提供 Stable / Nightly 选择，优先选 **Nightly（0.7.0）**：2026 年 11 月 Apple 改了服务端，0.6.4 及更早版本会卡在登录 503。
+   - 如果 iloader 提供 Stable / Nightly 选择，优先选 **Stable（最新稳定版）**。**不要选 Nightly / Alpha**：这类构建的配对/连接层有回归，会出现 `No valid pairing file has been loaded`，登录也更容易撞上 `503` / `-22410`。
+   - 如果 Stable 登录仍报 `503`：先把 iloader 更新到最新（它会拉最新稳定版）；仍不行再临时用 Nightly（0.7.0）完成登录，配对成功后再换回 Stable。
 2. **手机信任 + 开发者模式**：设置 → 通用 → VPN 与设备管理 → 信任你的 Apple ID；设置 → 隐私与安全性 → 开发者模式 → 打开并重启（和方式一第 3、4 步一样）。
 3. **手机端登录**：打开 LocalDevVPN 并连接；打开 SideStore，用同一个 Apple ID 登录；在 My Apps 里点 SideStore 自己的「7 DAYS」刷新一次（iloader 装的 SideStore 用的是 iloader 的 App Group，刷一次才会切到 SideStore 自己的）。
    - 登录报 `503` / `-22410`：到 Settings → User Customizations 关掉 On-Device Anisette Servers，换一个 Anisette 服务器再试。这是 Apple 服务端改动导致的，不是账号问题。
@@ -122,6 +123,9 @@
 
 **提示「无法安装此 App」**
 换一根数据线或换一个 USB 口；Windows 上确认 iTunes 已正确安装；或者先重启手机再试。
+
+**SideStore 报「No valid pairing file has been loaded」/ Device Registration Error**
+先确认装的是 SideStore **稳定版**，不是 Nightly/Alpha——nightly 的配对层有回归，换回 Stable 一般就好了。仍报错时，在 Mac 上用 iloader：Delete Stored Pairing → 选中 iPhone 并在手机上点「信任」→ Manage Pairing File → 在 SideStore 那一行点 Place，出现绿色「Pairing file placed successfully!」后重启 SideStore。
 
 **一直停在「正在解析…」**
 换一部试试。个别老剧的公开备用源可能已经失效，属于源站那边的问题。也可以先确认网络是否正常。
