@@ -102,6 +102,9 @@ jobs:
           git add -f test-report.log
           git commit -q -m "ci: 测试报告 run ${GITHUB_RUN_NUMBER} [skip ci]" || true
           git push -f origin HEAD:refs/heads/ci-test-log || echo "报告推送失败"
+          # 日志分支只是留档，用完必须回到原提交，否则后面的清单/源更新会被
+          # 提交到 ci-test-log 上（v1.0.54 的 SideStore 源就是这样没更新到 main）
+          git checkout -f "$GITHUB_SHA" || true
           exit $code
 
       - name: 打包未签名 IPA
@@ -160,10 +163,11 @@ jobs:
           cat ipa-manifest.txt
           git config user.email "ci@users.noreply.github.com"
           git config user.name "ci"
+          git checkout -B main origin/main
           git add -f ipa-manifest.txt
           git commit -q -m "ci: IPA 清单 [skip ci]" || true
           git pull --rebase -q origin main || true
-          git push || true
+          git push origin main || true
 
       - name: 上传 Actions 产物
         if: success()
@@ -247,9 +251,10 @@ jobs:
           PY
           git config user.email "ci@users.noreply.github.com"
           git config user.name "ci"
+          git checkout -B main origin/main
           git add docs/sidestore.json
           git commit -q -m "ci: SideStore 源 ${VER} [skip ci]" || true
           git pull --rebase -q origin main || true
-          git push || true
+          git push origin main || true
           # jsDelivr 对 @main 有缓存，主动清一下，客户端能立刻看到新版本
           curl -fsS "https://purge.jsdelivr.net/gh/gengbo1999/hongguo-box@main/docs/sidestore.json" >/dev/null || true

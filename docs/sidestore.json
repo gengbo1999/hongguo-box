@@ -14,11 +14,11 @@
       "screenshots": [],
       "versions": [
         {
-          "version": "1.0.53",
-          "date": "2026-11-15",
-          "localizedDescription": "更新到 1.0.53",
+          "version": "1.0.54",
+          "date": "2026-11-26",
+          "localizedDescription": "更新到 1.0.54：修复红果站点 vid_list 换成 v1_ token 导致的清晰度掉档，恢复 1080p",
           "downloadURL": "https://github.com/gengbo1999/hongguo-box/releases/latest/download/ShortDramaBox-unsigned.ipa",
-          "size": 1136470,
+          "size": 1137054,
           "minOSVersion": "17.0"
         }
       ]
