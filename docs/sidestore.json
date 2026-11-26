@@ -1,0 +1,27 @@
+{
+  "name": "短剧盒子",
+  "identifier": "com.duanju.box.source",
+  "apps": [
+    {
+      "name": "短剧盒子",
+      "bundleIdentifier": "com.duanju.box",
+      "developerName": "gengbo1999",
+      "subtitle": "红果短剧第三方客户端",
+      "localizedDescription": "红果短剧的非官方第三方 iOS 客户端。列表、搜索、选集、播放，1080p 自动解密；源站编码 iOS 播不了的会在本机转码后播放。需要 iOS 17 或更高。",
+      "iconURL": "https://cdn.jsdelivr.net/gh/gengbo1999/hongguo-box@main/ShortDramaBox/Sources/Assets.xcassets/AppIcon.appiconset/icon-1024.png",
+      "tintColor": "E64A3B",
+      "category": "entertainment",
+      "screenshots": [],
+      "versions": [
+        {
+          "version": "1.0.53",
+          "date": "2026-11-15",
+          "localizedDescription": "更新到 1.0.53",
+          "downloadURL": "https://github.com/gengbo1999/hongguo-box/releases/latest/download/ShortDramaBox-unsigned.ipa",
+          "size": 1136470,
+          "minOSVersion": "17.0"
+        }
+      ]
+    }
+  ]
+}

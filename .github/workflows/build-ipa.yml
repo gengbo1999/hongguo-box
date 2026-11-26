@@ -220,3 +220,36 @@ jobs:
           gh release list --limit 10
           echo "==> 保留下来的 tag："
           git ls-remote --tags origin | awk '{print $2}' | sed 's#refs/tags/##' | grep -v '\^{}' | sort
+
+      # 发完 Release 再写源 JSON：downloadURL 用 releases/latest，始终指向刚发布的包。
+      - name: 更新 SideStore 源
+        if: success()
+        env:
+          VER: ${{ steps.ver.outputs.version }}
+        run: |
+          SIZE=$(stat -f%z ShortDramaBox-unsigned.ipa)
+          python3 - "$VER" "$SIZE" <<'PY'
+          import datetime, json, pathlib, sys
+          ver, size = sys.argv[1], int(sys.argv[2])
+          p = pathlib.Path("docs/sidestore.json")
+          data = json.loads(p.read_text(encoding="utf-8"))
+          app = data["apps"][0]
+          app["versions"] = [{
+              "version": ver,
+              "date": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d"),
+              "localizedDescription": f"更新到 {ver}",
+              "downloadURL": "https://github.com/gengbo1999/hongguo-box/releases/latest/download/ShortDramaBox-unsigned.ipa",
+              "size": size,
+              "minOSVersion": "17.0",
+          }]
+          p.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+          print(f"docs/sidestore.json -> {ver} / {size} bytes")
+          PY
+          git config user.email "ci@users.noreply.github.com"
+          git config user.name "ci"
+          git add docs/sidestore.json
+          git commit -q -m "ci: SideStore 源 ${VER} [skip ci]" || true
+          git pull --rebase -q origin main || true
+          git push || true
+          # jsDelivr 对 @main 有缓存，主动清一下，客户端能立刻看到新版本
+          curl -fsS "https://purge.jsdelivr.net/gh/gengbo1999/hongguo-box@main/docs/sidestore.json" >/dev/null || true
