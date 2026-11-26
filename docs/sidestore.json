@@ -8,7 +8,7 @@
       "developerName": "gengbo1999",
       "subtitle": "红果短剧第三方客户端",
       "localizedDescription": "红果短剧的非官方第三方 iOS 客户端。列表、搜索、选集、播放，1080p 自动解密；源站编码 iOS 播不了的会在本机转码后播放。需要 iOS 17 或更高。",
-      "iconURL": "https://fastly.jsdelivr.net/gh/gengbo1999/hongguo-box@main/ShortDramaBox/Sources/Assets.xcassets/AppIcon.appiconset/icon-1024.png",
+      "iconURL": "https://gcore.jsdelivr.net/gh/gengbo1999/hongguo-box@main/ShortDramaBox/Sources/Assets.xcassets/AppIcon.appiconset/icon-1024.png",
       "tintColor": "E64A3B",
       "category": "entertainment",
       "screenshots": [],
