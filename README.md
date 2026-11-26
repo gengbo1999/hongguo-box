@@ -73,8 +73,10 @@
 4. **添加本仓库的源**：SideStore → Sources → 右上角「+」→ 粘贴：
 
    ```
-   https://cdn.jsdelivr.net/gh/gengbo1999/hongguo-box@main/docs/sidestore.json
+   https://fastly.jsdelivr.net/gh/gengbo1999/hongguo-box@main/docs/sidestore.json
    ```
+
+   国内网络优先用上面的 `fastly.jsdelivr.net` 节点；如果它也打不开，把域名换成 `cdn.jsdelivr.net` 再试。
 
    然后在 Sources 里打开「短剧盒子」→ Get / 安装。
    - 不想用源也可以：把 `ShortDramaBox-unsigned.ipa` 存到「文件」，SideStore → My Apps →「+」选这个 IPA。
